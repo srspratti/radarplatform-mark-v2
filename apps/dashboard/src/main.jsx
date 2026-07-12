@@ -8,40 +8,51 @@
  */
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { LANG, T, flipLang } from "./i18n.js";
 
 const KEY = new URLSearchParams(window.location.search).get("key") || "";
 const H = KEY ? { "X-Radar-Key": KEY } : {};
 
 const STAGE_IDX = { nouveau: 0, contacte: 0, client_actif: 0, en_reperage: 1,
                     en_visites: 2, offre: 3, transaction: 5, cloture: 7 };
-const SOURCE_LABEL = { danny_channel: "Referral", own_generated: "Website",
+const SOURCE_LABEL = { danny_channel: T("Referral", "Référence"),
+                       own_generated: T("Website", "Site web"),
                        matrix_visit: "Matrix", fub_import: "FUB",
-                       prospecting_agent: "Prospection" };
+                       prospecting_agent: T("Prospecting", "Prospection") };
 const T_MAP = (t) => t.startsWith("offer") ? "offer"
   : t.startsWith("visit") ? "visit"
   : (t === "message.sent" || t === "email.opened" || t === "call.logged") ? "msg"
   : t === "listing.favorited" ? "save" : "view";
 
 const EVENT_TXT = {
-  "listing.viewed": "Viewed a listing", "tour3d.viewed": "Explored the 3D tour",
-  "listing.favorited": "Saved a listing", "listing.shared": "Shared a listing",
-  "portal.session_started": "Opened the Vitrine portal",
-  "message.sent": "Sent a message", "email.opened": "Opened a Matrix alert",
-  "call.logged": "Call logged", "visit.requested": "Requested a visit",
-  "visit.scheduled": "Visit scheduled", "visit.completed": "Visit completed",
-  "offer.submitted": "Offer submitted", "offer.accepted": "Offer accepted",
-  "inspection.completed": "Inspection completed",
-  "financing.confirmed": "Financing confirmed",
-  "notary.scheduled": "Notary scheduled", "transaction.closed": "Closed",
-  "client.converted": "Added to Centris", "crm.synced": "Synced to FUB",
-  "lead.captured": "Lead captured", "lead.contacted": "First contact",
+  "listing.viewed": T("Viewed a listing", "Fiche consultée"),
+  "tour3d.viewed": T("Explored the 3D tour", "Visite 3D explorée"),
+  "listing.favorited": T("Saved a listing", "Fiche sauvegardée"),
+  "listing.shared": T("Shared a listing", "Fiche partagée"),
+  "portal.session_started": T("Opened the Vitrine portal", "Portail Vitrine ouvert"),
+  "message.sent": T("Sent a message", "Message envoyé"),
+  "email.opened": T("Opened a Matrix alert", "Alerte Matrix ouverte"),
+  "call.logged": T("Call logged", "Appel consigné"),
+  "visit.requested": T("Requested a visit", "Visite demandée"),
+  "visit.scheduled": T("Visit scheduled", "Visite planifiée"),
+  "visit.completed": T("Visit completed", "Visite complétée"),
+  "offer.submitted": T("Offer submitted", "Offre déposée"),
+  "offer.accepted": T("Offer accepted", "Offre acceptée"),
+  "inspection.completed": T("Inspection completed", "Inspection complétée"),
+  "financing.confirmed": T("Financing confirmed", "Financement confirmé"),
+  "notary.scheduled": T("Notary scheduled", "Notaire planifié"),
+  "transaction.closed": T("Closed", "Clôturé"),
+  "client.converted": T("Added to Centris", "Ajouté à Centris"),
+  "crm.synced": T("Synced to FUB", "Synchronisé vers FUB"),
+  "lead.captured": T("Lead captured", "Lead capté"),
+  "lead.contacted": T("First contact", "Premier contact"),
 };
 
 const ago = (iso) => {
   const m = Math.max(1, Math.round((Date.now() - new Date(iso + "Z")) / 60000));
   if (m < 60) return `${m} min`;
   if (m < 1440) return `${Math.round(m / 60)} h`;
-  return `${Math.round(m / 1440)} d`;
+  return `${Math.round(m / 1440)} ${T("d", "j")}`;
 };
 
 function toClient(c) {
@@ -59,12 +70,14 @@ function toClient(c) {
   const interestEv = tl.find((e) => e.payload &&
                              (e.payload.address || e.payload.listing_id));
   const chip = c.dormant
-    ? { tone: "amber", txt: "Inactive 14 d+ — time to re-engage" }
+    ? { tone: "amber", txt: T("Inactive 14 d+ — time to re-engage",
+                              "Inactif 14 j+ — à relancer") }
     : types.includes("visit.requested")
-      ? { tone: "ink", txt: "Visit requested via Vitrine — confirm a slot" }
+      ? { tone: "ink", txt: T("Visit requested via Vitrine — confirm a slot",
+                              "Visite demandée via la Vitrine — confirmer un créneau") }
       : lastOffer
         ? { tone: "amber", txt: EVENT_TXT[lastOffer.type] }
-        : { tone: "ink", txt: `Stage: ${c.stage_label}` };
+        : { tone: "ink", txt: `${T("Stage", "Étape")}: ${c.stage_label}` };
   return {
     id: c.id,
     name: c.name,
@@ -99,7 +112,7 @@ function toClient(c) {
     timeline: tl.slice(0, 8).map((e) => ({
       t: T_MAP(e.type),
       txt: EVENT_TXT[e.type] || e.type,
-      when: ago(e.ts) + " ago",
+      when: T(ago(e.ts) + " ago", "il y a " + ago(e.ts)),
     })),
   };
 }
@@ -117,20 +130,27 @@ function TopBar({ clients, hot, edition }) {
     a: { color: "#cbd5e1", textDecoration: "none", fontWeight: 600 },
     sel: { marginLeft: "auto", background: "#1e293b", color: "#fff",
       border: "1px solid #334155", borderRadius: 8, padding: "6px 8px",
-      fontSize: 12.5, maxWidth: 260 } };
+      fontSize: 12.5, maxWidth: 260 },
+    lang: { background: "#1e293b", color: "#fff", border: "1px solid #334155",
+      borderRadius: 99, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+      cursor: "pointer" } };
   return (
     <div style={S.bar}>
       <span style={{ fontWeight: 800 }}>RADAR<span style={{ color: "#f5a623" }}>HUB</span></span>
-      <a href="/ops" style={S.a} title="Boîte de leads — entonnoirs FUB, tiers, références">📡 Radar · leads inbox{hot ? ` · ${hot} 🔥` : ""}</a>
+      <a href="/ops" style={S.a} title={T("Leads inbox — FUB funnels, tiers, referrals", "Boîte de leads — entonnoirs FUB, tiers, références")}>📡 Radar · {T("leads inbox", "boîte de leads")}{hot ? ` · ${hot} 🔥` : ""}</a>
       <a href="/ops" style={S.a}>🤖 Agents</a>
       <select style={S.sel} defaultValue="" onChange={open}
-              title="Voir le portail comme le client le voit">
-        <option value="" disabled>👁 Ouvrir le portail d'un client…</option>
+              title={T("See the portal as the client sees it", "Voir le portail comme le client le voit")}>
+        <option value="" disabled>{T("👁 Open a client's portal…", "👁 Ouvrir le portail d'un client…")}</option>
         {clients.map((c) => (
           <option key={c.id} value={c.portal_token}>
             {c.name} — {c.engagement_score}/100
           </option>))}
       </select>
+      <button style={S.lang} onClick={flipLang}
+              title={T("Passer en français", "Switch to English")}>
+        🌐 {LANG.toUpperCase()}
+      </button>
       <span style={{ color: "#64748b", fontSize: 11 }}>{edition}</span>
     </div>
   );
@@ -146,7 +166,7 @@ function TopBar({ clients, hot, edition }) {
     ]);
     if (r.ok) rich = await r.json();
     if (s.ok) hot = (await s.json()).counts.hot_leads;
-    if (h.ok) edition = `édition ${(await h.json()).edition}`;
+    if (h.ok) edition = `${T("edition", "édition")} ${(await h.json()).edition}`;
     if (Array.isArray(rich) && rich.length) {
       window.__RADAR_CLIENTS__ = rich.map(toClient);
     }

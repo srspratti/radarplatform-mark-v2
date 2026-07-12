@@ -1,0 +1,28 @@
+# Radar Hub — forfait et fonctionnalités
+# ---------------------------------------
+# tier : le forfait vendu à ce courtier. Cumulatif :
+#   basic    → Porte ouverte QR, notes d'appel IA
+#   premium  → + réponse instantanée, alertes, relances auto, visites, rapports IA
+#   gold     → + client à vie, moteur d'avis, suivi de dossier, infolettre quartier
+#   platinum → + ACM, SMS/WhatsApp, registre de consentements
+#
+# Peut être forcé au déploiement par la variable d'environnement RADAR_TIER.
+tier = "platinum"
+
+# Forcer une fonctionnalité individuellement, peu importe le forfait.
+# Exemple : offrir le moteur d'avis en essai à un client premium.
+[overrides]
+# review_engine = true
+# messaging_sync = false
+
+# Réglages des fonctionnalités
+[settings]
+# Lien d'avis Google du courtier (moteur d'avis)
+review_link = "https://g.page/r/VOTRE-FICHE-GOOGLE/review"
+# Accusé de réception automatique (réponse instantanée) — {name} = prénom du lead
+auto_ack_fr = "Bonjour {name}, j'ai bien reçu votre demande — je vous reviens très vite. Danny"
+auto_ack_en = "Hi {name}, I received your request — I'll get back to you shortly. Danny"
+# Cadence de relance (jours après la capture du lead)
+sequence_days = [1, 3, 7, 30]
+# Taux d'appréciation annuel utilisé par le rapport de valeur (client à vie)
+appreciation_rate = 0.028

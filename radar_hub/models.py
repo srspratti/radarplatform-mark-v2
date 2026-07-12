@@ -185,6 +185,67 @@ class ContentItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class FollowUp(Base):
+    """Scheduled touches: lead nurture sequence steps, post-closing
+    client-for-life touches, review asks. Computed queues read WHERE
+    due_at <= now AND status='pending'."""
+    __tablename__ = "followups"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(30), index=True)  # sequence|anniversary|tax_season|equity_report|review_ask
+    due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)  # pending|done|skipped|cancelled
+    note: Mapped[str] = mapped_column(Text, default="")       # drafted message / context
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OutboundMessage(Base):
+    """Provider-agnostic outbound queue (auto-acks, SMS/WhatsApp connector).
+    Dev mode marks 'simulated'; a real provider (Twilio, SMTP) flips to 'sent'."""
+    __tablename__ = "outbound_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    channel: Mapped[str] = mapped_column(String(12))            # sms|email|whatsapp
+    to_addr: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    purpose: Mapped[str] = mapped_column(String(30), default="")  # auto_ack|sequence|review_ask|…
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)  # pending|sent|simulated|failed
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class NotificationItem(Base):
+    """In-app alert feed (hot lead, booking, message). The bell in the ops
+    console polls unread; browser Notification fires while the app is open."""
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str] = mapped_column(String(30), default="info")  # hot_lead|booking|message|info
+    title: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ConsentRecord(Base):
+    """Loi 25 / LCAP audit trail — one row per consent fact, never updated,
+    only appended (revocations are new rows with granted=False)."""
+    __tablename__ = "consents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    basis: Mapped[str] = mapped_column(String(40))     # express|implied|business_relationship
+    scope: Mapped[str] = mapped_column(String(120), default="communications")
+    granted: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(60), default="")  # open_house|web_form|prospecting|import
+    note: Mapped[str] = mapped_column(Text, default="")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 # --- engine/session -------------------------------------------------------
 engine = create_engine(settings.DB_URL, connect_args={"check_same_thread": False}
                        if settings.DB_URL.startswith("sqlite") else {})

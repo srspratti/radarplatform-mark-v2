@@ -10,6 +10,17 @@ internal/matrix-centris-rpa is deliberately NOT mounted or imported — it is
 Danny-internal tooling, excluded from the Docker image via .dockerignore.
 Its path into the hub is indirect and ToS-clean: harvester → FUB → hub import.
 """
+import sys
+
+if sys.version_info < (3, 10):  # bare `uvicorn` often resolves to Anaconda base 3.9
+    raise SystemExit(
+        f"\nRadar Hub requiert Python 3.10+ (déploiement: 3.12) — vous êtes sur "
+        f"{sys.version.split()[0]}.\n"
+        "Lancer plutôt :\n"
+        "  conda activate radar-platform-mark-v2\n"
+        "  uvicorn radar_hub.main:app --reload\n"
+        "ou simplement :  ./run_dev.sh\n")
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -141,6 +152,163 @@ def vitrine_portal(token: str = "", demo: str = ""):
         return FileResponse(index)
     return HTMLResponse("<h1>Vitrine non compilée — lancer build_frontend.sh</h1>",
                         status_code=503)
+
+
+_OPEN_HOUSE_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Porte ouverte — inscription</title></head>
+<body style="margin:0;background:#F6F8FA;font-family:system-ui;color:#111B2E;
+display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box">
+<form id="f" style="max-width:420px;width:100%;padding:28px;background:#fff;
+border:1px solid #DCE2EA;border-radius:16px;position:relative">
+<button type="button" id="lang" style="position:absolute;top:14px;right:14px;
+border:1px solid #DCE2EA;background:#fff;border-radius:99px;padding:5px 10px;
+font-size:12px;font-weight:700;color:#111B2E;cursor:pointer">🌐 FR</button>
+<div id="t_hi" style="font-weight:800;font-size:22px"></div>
+<p id="t_intro" style="color:#5A6577;font-size:14px;line-height:1.5"></p>
+<input id="n" required style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin-bottom:8px"/>
+<input id="p" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin-bottom:8px"/>
+<input id="e" type="email" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin-bottom:10px"/>
+<label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:#5A6577;line-height:1.4">
+<input id="c" type="checkbox" style="margin-top:2px"/><span id="t_consent"></span></label>
+<button id="t_btn" style="margin-top:12px;width:100%;padding:12px;border:0;border-radius:10px;
+background:#1656B4;color:#fff;font-weight:700;font-size:14px"></button>
+<div id="ok" style="display:none;text-align:center;padding:12px 0 0;color:#2F7D5C;
+font-weight:700"></div>
+</form>
+<script>
+const I18N = {
+  fr: { hi:"Bienvenue ! 👋",
+        intro:"Merci de votre visite — laissez vos coordonnées pour recevoir la fiche complète et les mises à jour de cette propriété (réf. __REF__).",
+        name:"Votre nom", phone:"Téléphone", email:"Courriel",
+        consent:"J'accepte de recevoir des communications au sujet de cette propriété et d'inscriptions similaires (désabonnement en tout temps — LCAP/Loi 25).",
+        btn:"M'inscrire", ok:"Merci ! Bonne visite. ✅", flag:"🌐 FR" },
+  en: { hi:"Welcome! 👋",
+        intro:"Thanks for visiting — leave your details to receive the full listing sheet and updates about this property (ref. __REF__).",
+        name:"Your name", phone:"Phone", email:"Email",
+        consent:"I agree to receive communications about this property and similar listings (unsubscribe anytime — CASL/Law 25).",
+        btn:"Sign me up", ok:"Thank you! Enjoy the visit. ✅", flag:"🌐 EN" },
+};
+let lang = localStorage.getItem("radar_lang") || "fr";
+function apply() {
+  const d = I18N[lang];
+  document.documentElement.lang = lang;
+  t_hi.textContent = d.hi; t_intro.textContent = d.intro;
+  n.placeholder = d.name; p.placeholder = d.phone; e.placeholder = d.email;
+  t_consent.textContent = d.consent; t_btn.textContent = d.btn;
+  ok.textContent = d.ok; document.getElementById("lang").textContent = d.flag;
+}
+document.getElementById("lang").onclick = () => {
+  lang = lang === "fr" ? "en" : "fr";
+  localStorage.setItem("radar_lang", lang); apply();
+};
+apply();
+document.getElementById("f").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const b = { name: n.value.trim(), phone: p.value.trim(),
+              email: e.value.trim(), consent: c.checked,
+              language: lang };
+  if (!b.name) return;
+  const r = await fetch("/api/openhouse/__REF__", { method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(b) });
+  if (r.ok) { ok.style.display = "block";
+              ev.target.querySelector("#t_btn").disabled = true; }
+};
+</script></body></html>"""
+
+
+@app.get("/oh/{ref}", response_class=HTMLResponse, include_in_schema=False)
+def open_house_form(ref: str):
+    safe = "".join(ch for ch in ref if ch.isalnum() or ch in "-_")[:40]
+    return HTMLResponse(_OPEN_HOUSE_PAGE.replace("__REF__", safe or "visite"))
+
+
+_TRACKER_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Suivi de votre dossier</title></head>
+<body style="margin:0;background:#F6F8FA;font-family:system-ui;color:#111B2E;
+padding:20px;box-sizing:border-box">
+<div id="app" style="max-width:520px;margin:0 auto">
+<div style="font-size:14px;color:#5A6577">…</div></div>
+<script>
+const I18N = {
+  fr: { file:"Votre dossier", hi:(n)=>`Bonjour ${n} !`, stage:"Étape actuelle :",
+        miles:"Jalons complétés", notfound:"Dossier introuvable — vérifiez votre lien.",
+        foot:"Une question ? Appelez ou textez votre courtier — cette page se met à jour automatiquement.",
+        flag:"🌐 FR" },
+  en: { file:"Your file", hi:(n)=>`Hello ${n}!`, stage:"Current stage:",
+        miles:"Completed milestones", notfound:"File not found — check your link.",
+        foot:"Questions? Call or text your realtor — this page updates automatically.",
+        flag:"🌐 EN" },
+};
+const STAGE_EN = { nouveau:"New lead", contacte:"Contacted",
+  client_actif:"Client (Centris)", en_reperage:"Scouting",
+  en_visites:"Touring", offre:"Offer submitted",
+  transaction:"In transaction", cloture:"Closed" };
+const MILESTONE_EN = { "visit.completed":"Visit completed",
+  "offer.submitted":"Offer submitted", "offer.accepted":"Offer accepted",
+  "inspection.completed":"Inspection completed",
+  "financing.confirmed":"Financing confirmed",
+  "notary.scheduled":"Notary appointment booked",
+  "transaction.closed":"Transaction closed 🎉" };
+let lang = localStorage.getItem("radar_lang") || "fr";
+let data = null;
+function render() {
+  const el = document.getElementById("app");
+  const t = I18N[lang];
+  document.documentElement.lang = lang;
+  const langBtn = `<button onclick="flip()" style="position:absolute;top:16px;right:16px;
+    border:1px solid #DCE2EA;background:#fff;border-radius:99px;padding:5px 10px;
+    font-size:12px;font-weight:700;cursor:pointer">${t.flag}</button>`;
+  if (!data) { el.innerHTML = `<div style="position:relative;background:#fff;border:1px solid #DCE2EA;
+    border-radius:16px;padding:24px">${langBtn}<p>${t.notfound}</p></div>`; return; }
+  const d = data;
+  const idx = d.stage_order.indexOf(d.stage);
+  const sLabel = (s) => lang === "fr" ? (d.stage_labels[s]||s) : (STAGE_EN[s]||d.stage_labels[s]||s);
+  const steps = d.stage_order.map((s, i) => `
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      <div style="width:14px;height:14px;border-radius:99px;margin-top:2px;flex-shrink:0;
+        background:${i<=idx?"#1656B4":"#fff"};border:2px solid ${i<=idx?"#1656B4":"#DCE2EA"}"></div>
+      <div style="padding-bottom:${i<d.stage_order.length-1?"18px":"0"};
+        border-left:${i<d.stage_order.length-1?"2px solid "+(i<idx?"#1656B4":"#DCE2EA"):"0"};
+        margin-left:-8px;padding-left:14px;transform:translateX(-6px)">
+        <div style="font-weight:${i===idx?"800":"600"};font-size:14px;
+          color:${i<=idx?"#111B2E":"#94A3B8"}">${sLabel(s)}</div>
+      </div>
+    </div>`).join("");
+  const miles = d.milestones.map(m => `
+    <div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;
+      border-bottom:1px solid #EEF1F5"><span>✅ ${lang==="fr"?m.label:(MILESTONE_EN[m.type]||m.label)}</span>
+      <span style="color:#5A6577">${m.ts.slice(0,10)}</span></div>`).join("");
+  el.innerHTML = `
+    <div style="position:relative;background:#fff;border:1px solid #DCE2EA;border-radius:16px;padding:24px">
+      ${langBtn}
+      <div style="font-size:12px;letter-spacing:.1em;color:#5A6577;text-transform:uppercase">${t.file}</div>
+      <h1 style="margin:4px 0 2px;font-size:22px">${t.hi(d.first_name)}</h1>
+      <p style="color:#5A6577;font-size:14px;margin:0 0 18px">${t.stage}
+        <b style="color:#1656B4">${sLabel(d.stage)}</b></p>
+      ${steps}
+      ${miles ? `<div style="margin-top:18px;font-weight:700;font-size:14px">${t.miles}</div>${miles}` : ""}
+      <p style="color:#5A6577;font-size:12px;margin-top:16px">${t.foot}</p>
+    </div>`;
+}
+function flip() { lang = lang === "fr" ? "en" : "fr";
+  localStorage.setItem("radar_lang", lang); render(); }
+(async () => {
+  const tok = location.pathname.split("/").pop();
+  const r = await fetch("/api/portal/" + tok + "/progress");
+  if (r.ok) data = await r.json();
+  render();
+})();
+</script></body></html>"""
+
+
+@app.get("/suivi/{token}", response_class=HTMLResponse, include_in_schema=False)
+def transaction_tracker(token: str):
+    return HTMLResponse(_TRACKER_PAGE)
 
 
 @app.get("/ops", response_class=HTMLResponse, include_in_schema=False)

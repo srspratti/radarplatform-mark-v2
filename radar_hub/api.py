@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .config import settings
-from .models import (Contact, ContentItem, Event, Expense, LedgerEntry,
-                     Listing, PortalKV, ProspectCandidate, WritebackItem,
-                     get_db, utcnow)
+from .models import (ConsentRecord, Contact, ContentItem, Event, Expense,
+                     FollowUp, LedgerEntry, Listing, NotificationItem,
+                     OutboundMessage, PortalKV, ProspectCandidate,
+                     WritebackItem, get_db, utcnow)
 from .events import ingest_event, FAMILIES
-from . import llm
+from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
 from .stages import STAGE_LABELS_FR, STAGE_ORDER
 from .connectors import fub as fub_conn
@@ -114,6 +115,34 @@ def create_lead(body: LeadIn, db: Session = Depends(get_db),
                  actor="system", origin="hub",
                  idempotency_key=f"lead-{c.id}")
     refresh_priority(db, c, use_llm=True)
+    # -- tiered hooks (each no-ops when the plan doesn't include it) ----------
+    if features.enabled("speed_to_lead") and (c.phone or c.email):
+        tmpl = features.setting(
+            "auto_ack_fr" if c.language == "fr" else "auto_ack_en",
+            "Bonjour {name}, j'ai bien reçu votre demande — je vous reviens "
+            "très vite.")
+        first = c.name.split()[0] if c.name else ""
+        _queue_msg(db, t, c, "sms" if c.phone else "email",
+                   tmpl.format(name=first), "auto_ack")
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="message.sent",
+                     actor="system", origin="hub",
+                     payload={"kind": "auto_ack"},
+                     idempotency_key=f"ack-{c.id}")
+    if features.enabled("sequences"):
+        for d in features.setting("sequence_days", [1, 3, 7, 30]):
+            db.add(FollowUp(tenant_id=t, contact_id=c.id, kind="sequence",
+                            due_at=utcnow() + timedelta(days=int(d)),
+                            note=f"Relance J+{d} — prendre des nouvelles"))
+        db.commit()
+    if features.enabled("consent_vault"):
+        db.add(ConsentRecord(tenant_id=t, contact_id=c.id, basis="implied",
+                             scope="communications", granted=True,
+                             source=c.funnel or c.source,
+                             note="Demande entrante — consentement tacite LCAP"))
+        db.commit()
+    if c.priority_score >= 60:
+        _notify(db, t, "hot_lead", f"🔥 Lead chaud : {c.name}",
+                c.priority_hint or "", c.id)
     return _contact_out(c)
 
 
@@ -560,6 +589,564 @@ def acheteur_sync(db: Session = Depends(get_db), t: str = Depends(tenant)):
 
 
 # --------------------------------------------------------------- dashboard --
+# ------------------------------------------------------- tiered features ----
+@router.get("/features", dependencies=[Depends(auth)])
+def feature_flags():
+    """Resolved feature map for the active tier — the UI renders from this."""
+    return features.resolve()
+
+
+def _require(key: str) -> None:
+    if not features.enabled(key):
+        label = features.FEATURES.get(key, ("", key, ""))[1]
+        raise HTTPException(403, f"« {label} » n'est pas incluse dans votre "
+                                 f"forfait — ajuster tier/overrides dans features.toml")
+
+
+def _notify(db: Session, t: str, kind: str, title: str, body: str = "",
+            contact_id: int | None = None) -> None:
+    if features.enabled("notifications"):
+        db.add(NotificationItem(tenant_id=t, kind=kind, title=title,
+                                body=body, contact_id=contact_id))
+        db.commit()
+
+
+def _queue_msg(db: Session, t: str, c: Contact, channel: str, body: str,
+               purpose: str) -> OutboundMessage:
+    m = OutboundMessage(tenant_id=t, contact_id=c.id, channel=channel,
+                        to_addr=c.phone if channel in ("sms", "whatsapp")
+                                else c.email,
+                        body=body, purpose=purpose,
+                        status="pending" if settings.TWILIO_SID else "simulated")
+    db.add(m)
+    db.commit()
+    return m
+
+
+# --- notifications (premium) ------------------------------------------------
+@router.get("/notifications", dependencies=[Depends(auth)])
+def notifications_list(unread: int = 0, db: Session = Depends(get_db),
+                       t: str = Depends(tenant)):
+    _require("notifications")
+    q = db.query(NotificationItem).filter_by(tenant_id=t)
+    if unread:
+        q = q.filter_by(read=False)
+    rows = q.order_by(NotificationItem.created_at.desc()).limit(20).all()
+    return [{"id": n.id, "kind": n.kind, "title": n.title, "body": n.body,
+             "read": n.read, "contact_id": n.contact_id,
+             "ts": n.created_at.isoformat()} for n in rows]
+
+
+@router.post("/notifications/read", dependencies=[Depends(auth)])
+def notifications_read(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    _require("notifications")
+    n = (db.query(NotificationItem).filter_by(tenant_id=t, read=False)
+         .update({"read": True}))
+    db.commit()
+    return {"marked": n}
+
+
+# --- follow-up queue: sequences + client-for-life + review asks -------------
+_FOLLOWUP_FEATURE = {"sequence": "sequences", "anniversary": "client_for_life",
+                     "tax_season": "client_for_life",
+                     "equity_report": "client_for_life",
+                     "review_ask": "review_engine"}
+
+
+@router.get("/followups/due", dependencies=[Depends(auth)])
+def followups_due(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Touches due today or overdue, filtered to enabled features. Sequence
+    steps auto-cancel once the lead replied (any client-actor event) or
+    converted — no manual bookkeeping."""
+    now = utcnow()
+    rows = (db.query(FollowUp).filter_by(tenant_id=t, status="pending")
+            .filter(FollowUp.due_at <= now)
+            .order_by(FollowUp.due_at).limit(50).all())
+    out = []
+    for f in rows:
+        feat = _FOLLOWUP_FEATURE.get(f.kind)
+        if feat and not features.enabled(feat):
+            continue
+        c = db.get(Contact, f.contact_id)
+        if not c:
+            f.status = "cancelled"
+            continue
+        if f.kind == "sequence":
+            replied = (db.query(Event).filter_by(tenant_id=t, contact_id=c.id,
+                                                 actor="client")
+                       .filter(Event.ts > f.created_at).first())
+            if replied or c.lifecycle == "client":
+                f.status = "cancelled"
+                continue
+        out.append({"id": f.id, "kind": f.kind, "due_at": f.due_at.isoformat(),
+                    "note": f.note, "contact": _contact_out(c)})
+    db.commit()
+    return out
+
+
+@router.post("/followups/{fid}/{action}", dependencies=[Depends(auth)])
+def followup_action(fid: int, action: str, db: Session = Depends(get_db),
+                    t: str = Depends(tenant)):
+    if action not in {"done", "skip"}:
+        raise HTTPException(422, "action: done|skip")
+    f = db.get(FollowUp, fid)
+    if not f or f.tenant_id != t:
+        raise HTTPException(404, "relance introuvable")
+    f.status = "done" if action == "done" else "skipped"
+    f.done_at = utcnow()
+    db.commit()
+    if action == "done":
+        ingest_event(db, tenant_id=t, contact_id=f.contact_id,
+                     etype="outreach.sent", actor="realtor", origin="hub",
+                     payload={"kind": f.kind},
+                     idempotency_key=f"followup-{f.id}")
+    return {"id": f.id, "status": f.status}
+
+
+# --- call capture (basic) ----------------------------------------------------
+class CallNoteIn(BaseModel):
+    notes: str
+    outcome: str = ""  # joint | boîte vocale | pas de réponse …
+
+
+@router.post("/contacts/{cid}/call-note", dependencies=[Depends(auth)])
+def call_note(cid: int, body: CallNoteIn, db: Session = Depends(get_db),
+              t: str = Depends(tenant)):
+    _require("call_capture")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    summary = llm.complete(
+        f"Résume cette note d'appel d'un courtier immobilier en 2 lignes "
+        f"factuelles (français) : {body.notes}",
+        system="Tu résumes des notes d'appel immobilières. Concis, factuel.",
+        max_tokens=150) or body.notes
+    ingest_event(db, tenant_id=t, contact_id=c.id, etype="call.logged",
+                 actor="realtor", origin="hub",
+                 payload={"summary": summary, "outcome": body.outcome},
+                 idempotency_key=f"call-{c.id}-{int(utcnow().timestamp())}")
+    if c.fub_person_id:
+        db.add(WritebackItem(tenant_id=t, contact_id=c.id, target="fub_note",
+                             body=f"Appel ({body.outcome or 'fait'}) — {summary}"))
+        db.commit()
+    return {"summary": summary, "fub_queued": bool(c.fub_person_id)}
+
+
+# --- open house QR intake (basic) --------------------------------------------
+class OpenHouseIn(BaseModel):
+    name: str
+    email: str = ""
+    phone: str = ""
+    consent: bool = False
+    language: str = "fr"
+
+
+@router.post("/openhouse/{ref}")  # public — the sign-in form posts here
+def openhouse_signin(ref: str, body: OpenHouseIn,
+                     db: Session = Depends(get_db)):
+    _require("open_house_qr")
+    t = settings.DEFAULT_TENANT
+    c = Contact(tenant_id=t, name=body.name.strip(), email=body.email.strip(),
+                phone=body.phone.strip(), language=body.language,
+                source="open_house", sublabel=ref,
+                funnel="open_house", campaign=ref,
+                notes=f"Porte ouverte {ref}")
+    db.add(c)
+    db.commit()
+    ingest_event(db, tenant_id=t, contact_id=c.id, etype="lead.captured",
+                 actor="system", origin="hub", payload={"open_house": ref},
+                 idempotency_key=f"oh-{c.id}")
+    if features.enabled("consent_vault"):
+        db.add(ConsentRecord(tenant_id=t, contact_id=c.id,
+                             basis="express" if body.consent else "implied",
+                             scope="communications", granted=True,
+                             source="open_house",
+                             note=f"Formulaire porte ouverte {ref}"
+                                  + (" — case cochée" if body.consent else "")))
+        db.commit()
+    refresh_priority(db, c, use_llm=False)
+    _notify(db, t, "hot_lead", f"Porte ouverte : {c.name}",
+            f"Nouveau visiteur inscrit — {ref}", c.id)
+    return {"ok": True, "merci": True}
+
+
+@router.get("/openhouse/{ref}/qr.svg", dependencies=[Depends(auth)])
+def openhouse_qr(ref: str, request: Request):
+    _require("open_house_qr")
+    url = str(request.base_url).rstrip("/") + f"/oh/{ref}"
+    try:
+        import qrcode
+        import qrcode.image.svg
+        img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage,
+                          box_size=14)
+        from fastapi.responses import Response as _Resp
+        return _Resp(img.to_string(), media_type="image/svg+xml")
+    except ImportError:
+        raise HTTPException(501, f"module qrcode absent — le lien reste {url}")
+
+
+# --- client for life + review engine (gold) ----------------------------------
+@router.get("/lifecycle/{cid}/upcoming", dependencies=[Depends(auth)])
+def lifecycle_upcoming(cid: int, db: Session = Depends(get_db),
+                       t: str = Depends(tenant)):
+    _require("client_for_life")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t or c.lifecycle != "client":
+        raise HTTPException(404, "client introuvable")
+    closed = (db.query(Event).filter_by(tenant_id=t, contact_id=cid,
+                                        type="transaction.closed")
+              .order_by(Event.ts.desc()).first())
+    anchor = (closed.ts if closed else c.converted_at) or c.created_at
+    now = utcnow()
+    nxt_anniv = anchor.replace(year=anchor.year + 1)
+    while nxt_anniv <= now:
+        nxt_anniv = nxt_anniv.replace(year=nxt_anniv.year + 1)
+    jan15 = now.replace(month=1, day=15, hour=9, minute=0, second=0,
+                        microsecond=0)
+    if jan15 <= now:
+        jan15 = jan15.replace(year=jan15.year + 1)
+    sugg = [
+        {"kind": "anniversary", "due_at": nxt_anniv.isoformat(),
+         "note": f"Anniversaire d'achat de {c.name.split()[0]} — un mot personnel"},
+        {"kind": "tax_season", "due_at": jan15.isoformat(),
+         "note": "Rappel taxes municipales/scolaires — offrir le relevé et répondre aux questions"},
+        {"kind": "equity_report", "due_at": nxt_anniv.isoformat(),
+         "note": "Rapport annuel de valeur — « votre propriété vaut maintenant… »"},
+    ]
+    if features.enabled("review_engine") and closed:
+        recent = (now - closed.ts).days <= 60
+        asked = (db.query(FollowUp).filter_by(tenant_id=t, contact_id=cid,
+                                              kind="review_ask").first())
+        if recent and not asked:
+            sugg.insert(0, {"kind": "review_ask",
+                            "due_at": now.isoformat(),
+                            "note": "Clôture récente — demander un avis Google maintenant"})
+    pending = {f.kind for f in db.query(FollowUp)
+               .filter_by(tenant_id=t, contact_id=cid, status="pending").all()}
+    return {"contact": _contact_out(c), "anchor": anchor.isoformat(),
+            "suggestions": [s for s in sugg if s["kind"] not in pending],
+            "already_scheduled": sorted(pending)}
+
+
+@router.post("/lifecycle/{cid}/schedule", dependencies=[Depends(auth)])
+def lifecycle_schedule(cid: int, db: Session = Depends(get_db),
+                       t: str = Depends(tenant)):
+    up = lifecycle_upcoming(cid, db=db, t=t)
+    created = []
+    for s in up["suggestions"]:
+        db.add(FollowUp(tenant_id=t, contact_id=cid, kind=s["kind"],
+                        due_at=datetime.fromisoformat(s["due_at"]),
+                        note=s["note"]))
+        created.append(s["kind"])
+    db.commit()
+    return {"scheduled": created}
+
+
+@router.get("/lifecycle/{cid}/equity-report", dependencies=[Depends(auth)])
+def equity_report(cid: int, price: float = 0,
+                  db: Session = Depends(get_db), t: str = Depends(tenant)):
+    _require("client_for_life")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    if not price:
+        offer = (db.query(Event).filter_by(tenant_id=t, contact_id=cid,
+                                           type="offer.accepted")
+                 .order_by(Event.ts.desc()).first())
+        price = float((offer.payload or {}).get("amount", 0)) if offer else 0
+    if not price:
+        raise HTTPException(422, "prix d'achat inconnu — passer ?price=")
+    anchor = c.converted_at or c.created_at
+    years = max((utcnow() - anchor).days / 365.25, 0)
+    rate = float(features.setting("appreciation_rate", 0.028))
+    est = price * ((1 + rate) ** years)
+    lo, hi = est * 0.96, est * 1.04
+    body = (f"Bonjour {c.name.split()[0]},\n\n"
+            f"Petit bilan annuel : la propriété acquise à "
+            f"{price:,.0f} $ vaut aujourd'hui environ {lo:,.0f} $ à "
+            f"{hi:,.0f} $ (appréciation moyenne du secteur ~{rate*100:.1f} %/an "
+            f"sur {years:.1f} ans). Estimation indicative — pour une évaluation "
+            f"précise, appelez-moi.\n\nDanny").replace(",", " ")
+    nicer = llm.complete(
+        f"Améliore ce message annuel de valeur immobilière (français, chaleureux, "
+        f"4 phrases max, garde tous les chiffres exacts) :\n{body}",
+        max_tokens=300)
+    return {"purchase_price": price, "estimate_low": round(lo),
+            "estimate_high": round(hi), "years": round(years, 1),
+            "message": nicer or body}
+
+
+@router.post("/clients/{cid}/review-ask", dependencies=[Depends(auth)])
+def review_ask(cid: int, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    _require("review_engine")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    link = features.setting("review_link", "")
+    first = c.name.split()[0] if c.name else ""
+    body = (f"Bonjour {first} ! Merci encore pour votre confiance. "
+            f"Un petit avis Google m'aiderait énormément : {link}"
+            if c.language == "fr" else
+            f"Hi {first}! Thanks again for your trust. A quick Google review "
+            f"would mean a lot: {link}")
+    _queue_msg(db, t, c, "sms" if c.phone else "email", body, "review_ask")
+    ingest_event(db, tenant_id=t, contact_id=cid, etype="outreach.sent",
+                 actor="realtor", origin="hub", payload={"kind": "review_ask"},
+                 idempotency_key=f"review-{cid}-{int(utcnow().timestamp())}")
+    db.add(FollowUp(tenant_id=t, contact_id=cid, kind="review_ask",
+                    due_at=utcnow(), status="done", note=body,
+                    done_at=utcnow()))
+    db.commit()
+    return {"message": body,
+            "sms_url": ("sms:" + "".join(ch for ch in c.phone
+                                         if ch.isdigit() or ch == "+"))
+                       if c.phone else ""}
+
+
+# --- transaction tracker (gold) — token-authenticated, client-facing ---------
+_MILESTONES_FR = {
+    "visit.completed": "Visite effectuée", "offer.submitted": "Offre déposée",
+    "offer.accepted": "Offre acceptée", "inspection.completed": "Inspection complétée",
+    "financing.confirmed": "Financement confirmé", "notary.scheduled": "Rendez-vous notaire fixé",
+    "transaction.closed": "Transaction clôturée 🎉",
+}
+
+
+@router.get("/portal/{token}/progress")
+def portal_progress(token: str, db: Session = Depends(get_db)):
+    _require("transaction_tracker")
+    c = _contact_by_token(db, token)
+    events = (db.query(Event).filter_by(tenant_id=c.tenant_id, contact_id=c.id)
+              .filter(Event.type.in_(list(_MILESTONES_FR)))
+              .order_by(Event.ts).all())
+    return {"first_name": c.name.split()[0] if c.name else "",
+            "stage": c.stage, "stage_label": STAGE_LABELS_FR.get(c.stage, c.stage),
+            "stage_order": STAGE_ORDER, "stage_labels": STAGE_LABELS_FR,
+            "milestones": [{"type": e.type, "label": _MILESTONES_FR[e.type],
+                            "ts": e.ts.isoformat()} for e in events]}
+
+
+# --- showing scheduler (premium) ---------------------------------------------
+class SlotsIn(BaseModel):
+    slots: list[str]  # e.g. ["samedi 10h", "samedi 14h", "dimanche 11h"]
+
+
+@router.post("/contacts/{cid}/propose-slots", dependencies=[Depends(auth)])
+def propose_slots(cid: int, body: SlotsIn, db: Session = Depends(get_db),
+                  t: str = Depends(tenant)):
+    _require("showing_scheduler")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    if not body.slots:
+        raise HTTPException(422, "au moins un créneau")
+    first = c.name.split()[0] if c.name else ""
+    opts = " ".join(f"{i+1}) {s}" for i, s in enumerate(body.slots[:3]))
+    msg = (f"Bonjour {first} ! Pour la visite, je vous propose : {opts}. "
+           f"Répondez 1, 2 ou 3 et c'est noté. Danny")
+    _queue_msg(db, t, c, "sms", msg, "slots")
+    ingest_event(db, tenant_id=t, contact_id=cid, etype="outreach.sent",
+                 actor="realtor", origin="hub",
+                 payload={"kind": "slots", "slots": body.slots[:3]},
+                 idempotency_key=f"slots-{cid}-{int(utcnow().timestamp())}")
+    return {"message": msg,
+            "sms_url": ("sms:" + "".join(ch for ch in c.phone
+                                         if ch.isdigit() or ch == "+"))
+                       if c.phone else ""}
+
+
+# --- CMA generator (platinum) -------------------------------------------------
+class CMAIn(BaseModel):
+    subject: str = ""     # adresse/description de la propriété sujette
+    comps_text: str       # une ligne par comparable : adresse, prix, [pi2]
+
+
+@router.post("/cma", dependencies=[Depends(auth)])
+def cma_generate(body: CMAIn, t: str = Depends(tenant)):
+    _require("cma_generator")
+    import re as _re
+    comps = []
+    for line in body.comps_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        nums = [float(n.replace(" ", "").replace(",", ""))
+                for n in _re.findall(r"[\d][\d\s,]{4,}", line)]
+        prices = [n for n in nums if n >= 50_000]
+        sqft = next((n for n in nums if 200 <= n < 50_000), None)
+        if prices:
+            comps.append({"line": line, "price": prices[0], "sqft": sqft})
+    if len(comps) < 2:
+        raise HTTPException(422, "au moins 2 comparables avec prix requis")
+    prices = sorted(c["price"] for c in comps)
+    n = len(prices)
+    median = (prices[n // 2] if n % 2 else (prices[n//2 - 1] + prices[n//2]) / 2)
+    ppsf = [c["price"] / c["sqft"] for c in comps if c.get("sqft")]
+    stats = {"n": n, "min": prices[0], "max": prices[-1],
+             "median": round(median),
+             "suggested_low": round(median * 0.97),
+             "suggested_high": round(median * 1.03),
+             "avg_price_per_sqft": round(sum(ppsf) / len(ppsf)) if ppsf else None}
+    det = (f"ACM — {body.subject or 'propriété sujette'}\n"
+           f"{n} comparables · fourchette {stats['min']:,.0f} $ – "
+           f"{stats['max']:,.0f} $ · médiane {stats['median']:,} $"
+           + (f" · {stats['avg_price_per_sqft']} $/pi²" if ppsf else "") + "\n"
+           f"Prix suggéré : {stats['suggested_low']:,} $ à "
+           f"{stats['suggested_high']:,} $.\n"
+           f"Analyse indicative fondée sur les comparables fournis — ne "
+           f"constitue pas une évaluation agréée.").replace(",", " ")
+    narrative = llm.complete(
+        f"Rédige une courte analyse comparative de marché (français, 6 phrases "
+        f"max, ton professionnel) pour « {body.subject or 'la propriété'} » à "
+        f"partir de ces chiffres exacts : {json.dumps(stats)} et comparables : "
+        f"{[c['line'] for c in comps]}. Termine par la fourchette suggérée. "
+        f"Mentionne que ce n'est pas une évaluation agréée.",
+        max_tokens=450)
+    return {"stats": stats, "comps": comps, "narrative": narrative or det,
+            "llm": bool(narrative)}
+
+
+# --- farming reports (gold) ----------------------------------------------------
+class FarmIn(BaseModel):
+    area: str
+    highlights: str = ""   # ventes récentes, projets, stats à mentionner
+    language: str = "fr"
+
+
+@router.post("/agents/content/farming-report", dependencies=[Depends(auth)])
+def farming_report(body: FarmIn, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    _require("farming_reports")
+    hl = body.highlights or ("activité stable, bon moment pour faire évaluer "
+                             "sa propriété")
+    draft = llm.complete(
+        f"Rédige une infolettre de quartier (français québécois, 160 mots max) "
+        f"pour les résidents de {body.area}, signée par leur courtier Danny. "
+        f"Angle : « le marché dans votre quartier ce mois-ci ». "
+        f"Éléments à intégrer : {hl}. CTA doux (évaluation gratuite). "
+        f"Aucune promesse chiffrée inventée.",
+        max_tokens=400)
+    if not draft:
+        draft = (f"[{body.area} — le marché ce mois-ci]\n\n"
+                 f"Bonjour voisins ! Le marché bouge dans {body.area}"
+                 + (f" : {body.highlights}" if body.highlights else "")
+                 + ". Curieux de savoir ce que vaut votre propriété "
+                 "aujourd'hui ? Je vous prépare une estimation gratuite, sans "
+                 "engagement — répondez à ce message ou appelez-moi.\n\nDanny")
+    item = ContentItem(tenant_id=t, platform="infolettre",
+                       language=body.language, topic=f"Quartier — {body.area}",
+                       body=draft)
+    db.add(item)
+    db.commit()
+    return {"id": item.id, "draft": draft, "queued": "file de contenu"}
+
+
+# --- messaging sync connector (platinum) ---------------------------------------
+@router.get("/messaging/status", dependencies=[Depends(auth)])
+def messaging_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    _require("messaging_sync")
+    q = db.query(OutboundMessage).filter_by(tenant_id=t)
+    return {"provider_configured": bool(settings.TWILIO_SID),
+            "provider": "twilio" if settings.TWILIO_SID else "aucun (mode simulation)",
+            "queued": q.filter_by(status="pending").count(),
+            "simulated": q.filter_by(status="simulated").count(),
+            "sent": q.filter_by(status="sent").count()}
+
+
+class MsgIn(BaseModel):
+    contact_id: int
+    body: str
+    channel: str = "sms"
+
+
+@router.post("/messaging/send", dependencies=[Depends(auth)])
+def messaging_send(body: MsgIn, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    _require("messaging_sync")
+    c = db.get(Contact, body.contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    m = _queue_msg(db, t, c, body.channel, body.body, "manual")
+    ingest_event(db, tenant_id=t, contact_id=c.id, etype="message.sent",
+                 actor="realtor", origin="hub",
+                 payload={"channel": body.channel},
+                 idempotency_key=f"msg-{m.id}")
+    return {"id": m.id, "status": m.status}
+
+
+@router.post("/webhooks/sms-inbound")  # public — provider posts inbound texts
+async def sms_inbound(request: Request, db: Session = Depends(get_db)):
+    _require("messaging_sync")
+    data = await request.json()
+    frm = "".join(ch for ch in str(data.get("from", "")) if ch.isdigit())[-10:]
+    if not frm:
+        raise HTTPException(422, "champ from requis")
+    t = settings.DEFAULT_TENANT
+    match = None
+    for c in db.query(Contact).filter_by(tenant_id=t).all():
+        if "".join(ch for ch in (c.phone or "") if ch.isdigit())[-10:] == frm:
+            match = c
+            break
+    if not match:
+        return {"matched": False}
+    ingest_event(db, tenant_id=t, contact_id=match.id, etype="message.sent",
+                 actor="client", origin="hub",
+                 payload={"channel": "sms", "body": str(data.get("body", ""))[:500]},
+                 idempotency_key=f"sms-in-{match.id}-{int(utcnow().timestamp())}")
+    _notify(db, t, "message", f"SMS de {match.name}",
+            str(data.get("body", ""))[:120], match.id)
+    return {"matched": True, "contact_id": match.id}
+
+
+# --- consent vault (platinum) ---------------------------------------------------
+class ConsentIn2(BaseModel):
+    basis: str = "express"          # express | implied | business_relationship
+    scope: str = "communications"
+    granted: bool = True
+    source: str = "manuel"
+    note: str = ""
+
+
+@router.get("/contacts/{cid}/consents", dependencies=[Depends(auth)])
+def consents_list(cid: int, db: Session = Depends(get_db),
+                  t: str = Depends(tenant)):
+    _require("consent_vault")
+    rows = (db.query(ConsentRecord).filter_by(tenant_id=t, contact_id=cid)
+            .order_by(ConsentRecord.recorded_at.desc()).all())
+    return [{"id": r.id, "basis": r.basis, "scope": r.scope,
+             "granted": r.granted, "source": r.source, "note": r.note,
+             "recorded_at": r.recorded_at.isoformat()} for r in rows]
+
+
+@router.post("/contacts/{cid}/consents", dependencies=[Depends(auth)])
+def consents_add(cid: int, body: ConsentIn2, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    _require("consent_vault")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    r = ConsentRecord(tenant_id=t, contact_id=cid, **body.model_dump())
+    db.add(r)
+    db.commit()
+    return {"id": r.id}
+
+
+@router.get("/consents/export", dependencies=[Depends(auth)])
+def consents_export(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Registre complet — piste d'audit Loi 25 (à archiver)."""
+    _require("consent_vault")
+    rows = (db.query(ConsentRecord).filter_by(tenant_id=t)
+            .order_by(ConsentRecord.recorded_at).all())
+    names = {c.id: c.name for c in db.query(Contact).filter_by(tenant_id=t)}
+    return {"generated_at": utcnow().isoformat(), "tenant": t,
+            "records": [{"contact": names.get(r.contact_id, f"#{r.contact_id}"),
+                         "basis": r.basis, "scope": r.scope,
+                         "granted": r.granted, "source": r.source,
+                         "note": r.note, "recorded_at": r.recorded_at.isoformat()}
+                        for r in rows]}
+
+
 # --------------------------------------------------------------- analytics --
 FUNNEL_LABELS_FR = {"fub_import": "CRM FUB", "matrix_visit": "Alertes Matrix",
                     "danny_channel": "Références", "own_generated": "Site web",
@@ -647,6 +1234,7 @@ def _fallback_report(stats: dict) -> str:
 @router.post("/analytics/ask", dependencies=[Depends(auth)])
 def analytics_ask(body: AskIn, db: Session = Depends(get_db),
                   t: str = Depends(tenant)):
+    _require("analytics_ai")
     stats = _analytics_stats(db, t)
     prompt = (f"Question du courtier : {body.question}\n\n"
               f"Données du portefeuille (JSON) :\n"

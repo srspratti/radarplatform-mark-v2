@@ -25,6 +25,12 @@ class Settings:
     # Vitrine webhook
     VITRINE_WEBHOOK_SECRET: str = os.getenv("VITRINE_WEBHOOK_SECRET", "")
 
+    # SMS/WhatsApp provider (messaging_sync connector — platinum). Unset = the
+    # outbound queue marks messages "simulated" instead of sending.
+    TWILIO_SID: str = os.getenv("TWILIO_SID", "")
+    TWILIO_TOKEN: str = os.getenv("TWILIO_TOKEN", "")
+    TWILIO_FROM: str = os.getenv("TWILIO_FROM", "")
+
     # Per-client Matrix intake address ("design it on the fly")
     #   plus  -> INTAKE_EMAIL_USER+<tag>@gmail.com   (works with any Gmail/Workspace inbox)
     #   alias -> <slug>-<tag>@INTAKE_EMAIL_DOMAIN     (needs a catch-all domain)
