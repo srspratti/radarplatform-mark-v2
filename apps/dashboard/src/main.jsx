@@ -15,44 +15,54 @@ const H = KEY ? { "X-Radar-Key": KEY } : {};
 
 const STAGE_IDX = { nouveau: 0, contacte: 0, client_actif: 0, en_reperage: 1,
                     en_visites: 2, offre: 3, transaction: 5, cloture: 7 };
-const SOURCE_LABEL = { danny_channel: T("Referral", "Référence"),
-                       own_generated: T("Website", "Site web"),
+// The hub sends French labels/sublabels (seed data, STAGE_LABELS_FR); in EN
+// mode translate the known vocabulary and pass unknown values through.
+const STAGE_EN = { nouveau: "New lead", contacte: "Contacted",
+                   client_actif: "Client (Centris)", en_reperage: "Scouting",
+                   en_visites: "Touring", offre: "Offer submitted",
+                   transaction: "In transaction", cloture: "Closed" };
+const SUB_EN = { "Alerte Centris": "Centris alert", "Demande de visite": "Visit request",
+                 "Formulaire site": "Website form", "Landing Vitrine": "Vitrine landing",
+                 "Référence gym": "Gym referral", "Référence hockey": "Hockey referral" };
+const trSub = (s) => (LANG === "fr" || !s) ? s : (SUB_EN[s] || s);
+const SOURCE_LABEL = { danny_channel: T("Référence", "Referral"),
+                       own_generated: T("Site web", "Website"),
                        matrix_visit: "Matrix", fub_import: "FUB",
-                       prospecting_agent: T("Prospecting", "Prospection") };
+                       prospecting_agent: T("Prospection", "Prospecting") };
 const T_MAP = (t) => t.startsWith("offer") ? "offer"
   : t.startsWith("visit") ? "visit"
   : (t === "message.sent" || t === "email.opened" || t === "call.logged") ? "msg"
   : t === "listing.favorited" ? "save" : "view";
 
 const EVENT_TXT = {
-  "listing.viewed": T("Viewed a listing", "Fiche consultée"),
-  "tour3d.viewed": T("Explored the 3D tour", "Visite 3D explorée"),
-  "listing.favorited": T("Saved a listing", "Fiche sauvegardée"),
-  "listing.shared": T("Shared a listing", "Fiche partagée"),
-  "portal.session_started": T("Opened the Vitrine portal", "Portail Vitrine ouvert"),
-  "message.sent": T("Sent a message", "Message envoyé"),
-  "email.opened": T("Opened a Matrix alert", "Alerte Matrix ouverte"),
-  "call.logged": T("Call logged", "Appel consigné"),
-  "visit.requested": T("Requested a visit", "Visite demandée"),
-  "visit.scheduled": T("Visit scheduled", "Visite planifiée"),
-  "visit.completed": T("Visit completed", "Visite complétée"),
-  "offer.submitted": T("Offer submitted", "Offre déposée"),
-  "offer.accepted": T("Offer accepted", "Offre acceptée"),
-  "inspection.completed": T("Inspection completed", "Inspection complétée"),
-  "financing.confirmed": T("Financing confirmed", "Financement confirmé"),
-  "notary.scheduled": T("Notary scheduled", "Notaire planifié"),
-  "transaction.closed": T("Closed", "Clôturé"),
-  "client.converted": T("Added to Centris", "Ajouté à Centris"),
-  "crm.synced": T("Synced to FUB", "Synchronisé vers FUB"),
-  "lead.captured": T("Lead captured", "Lead capté"),
-  "lead.contacted": T("First contact", "Premier contact"),
+  "listing.viewed": T("Fiche consultée", "Viewed a listing"),
+  "tour3d.viewed": T("Visite 3D explorée", "Explored the 3D tour"),
+  "listing.favorited": T("Fiche sauvegardée", "Saved a listing"),
+  "listing.shared": T("Fiche partagée", "Shared a listing"),
+  "portal.session_started": T("Portail Vitrine ouvert", "Opened the Vitrine portal"),
+  "message.sent": T("Message envoyé", "Sent a message"),
+  "email.opened": T("Alerte Matrix ouverte", "Opened a Matrix alert"),
+  "call.logged": T("Appel consigné", "Call logged"),
+  "visit.requested": T("Visite demandée", "Requested a visit"),
+  "visit.scheduled": T("Visite planifiée", "Visit scheduled"),
+  "visit.completed": T("Visite complétée", "Visit completed"),
+  "offer.submitted": T("Offre déposée", "Offer submitted"),
+  "offer.accepted": T("Offre acceptée", "Offer accepted"),
+  "inspection.completed": T("Inspection complétée", "Inspection completed"),
+  "financing.confirmed": T("Financement confirmé", "Financing confirmed"),
+  "notary.scheduled": T("Notaire planifié", "Notary scheduled"),
+  "transaction.closed": T("Clôturé", "Closed"),
+  "client.converted": T("Ajouté à Centris", "Added to Centris"),
+  "crm.synced": T("Synchronisé vers FUB", "Synced to FUB"),
+  "lead.captured": T("Lead capté", "Lead captured"),
+  "lead.contacted": T("Premier contact", "First contact"),
 };
 
 const ago = (iso) => {
   const m = Math.max(1, Math.round((Date.now() - new Date(iso + "Z")) / 60000));
   if (m < 60) return `${m} min`;
   if (m < 1440) return `${Math.round(m / 60)} h`;
-  return `${Math.round(m / 1440)} ${T("d", "j")}`;
+  return `${Math.round(m / 1440)} ${T("j", "d")}`;
 };
 
 function toClient(c) {
@@ -70,20 +80,18 @@ function toClient(c) {
   const interestEv = tl.find((e) => e.payload &&
                              (e.payload.address || e.payload.listing_id));
   const chip = c.dormant
-    ? { tone: "amber", txt: T("Inactive 14 d+ — time to re-engage",
-                              "Inactif 14 j+ — à relancer") }
+    ? { tone: "amber", txt: T("Inactif 14 j+ — à relancer", "Inactive 14 d+ — time to re-engage") }
     : types.includes("visit.requested")
-      ? { tone: "ink", txt: T("Visit requested via Vitrine — confirm a slot",
-                              "Visite demandée via la Vitrine — confirmer un créneau") }
+      ? { tone: "ink", txt: T("Visite demandée via la Vitrine — confirmer un créneau", "Visit requested via Vitrine — confirm a slot") }
       : lastOffer
         ? { tone: "amber", txt: EVENT_TXT[lastOffer.type] }
-        : { tone: "ink", txt: `${T("Stage", "Étape")}: ${c.stage_label}` };
+        : { tone: "ink", txt: `${T("Étape", "Stage")}: ${T(c.stage_label, STAGE_EN[c.stage] || c.stage_label)}` };
   return {
     id: c.id,
     name: c.name,
     phone: c.phone || "",
     initials: c.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase(),
-    interest: c.sublabel || (interestEv &&
+    interest: trSub(c.sublabel) || (interestEv &&
       (interestEv.payload.address || interestEv.payload.listing_id)) ||
       (c.notes || "").slice(0, 42) || "—",
     price: lastOffer && lastOffer.payload && lastOffer.payload.amount
@@ -93,7 +101,7 @@ function toClient(c) {
     trend: 0, // period-over-period trend lands with the analytics phase
     last: tl.length ? ago(tl[0].ts) : "—",
     source: c.source === "fub_import" && c.sublabel
-      ? c.sublabel : (SOURCE_LABEL[c.source] || c.source),
+      ? trSub(c.sublabel) : (SOURCE_LABEL[c.source] || c.source),
     signals: {
       views: count((t) => t === "listing.viewed" || t === "tour3d.viewed"),
       saves: count((t) => t === "listing.favorited"),
@@ -112,7 +120,7 @@ function toClient(c) {
     timeline: tl.slice(0, 8).map((e) => ({
       t: T_MAP(e.type),
       txt: EVENT_TXT[e.type] || e.type,
-      when: T(ago(e.ts) + " ago", "il y a " + ago(e.ts)),
+      when: T("il y a " + ago(e.ts), ago(e.ts) + " ago"),
     })),
   };
 }
@@ -137,18 +145,18 @@ function TopBar({ clients, hot, edition }) {
   return (
     <div style={S.bar}>
       <span style={{ fontWeight: 800 }}>RADAR<span style={{ color: "#f5a623" }}>HUB</span></span>
-      <a href="/ops" style={S.a} title={T("Leads inbox — FUB funnels, tiers, referrals", "Boîte de leads — entonnoirs FUB, tiers, références")}>📡 Radar · {T("leads inbox", "boîte de leads")}{hot ? ` · ${hot} 🔥` : ""}</a>
+      <a href="/ops" style={S.a} title={T("Boîte de leads — entonnoirs FUB, tiers, références", "Leads inbox — FUB funnels, tiers, referrals")}>📡 Radar · {T("boîte de leads", "leads inbox")}{hot ? ` · ${hot} 🔥` : ""}</a>
       <a href="/ops" style={S.a}>🤖 Agents</a>
       <select style={S.sel} defaultValue="" onChange={open}
-              title={T("See the portal as the client sees it", "Voir le portail comme le client le voit")}>
-        <option value="" disabled>{T("👁 Open a client's portal…", "👁 Ouvrir le portail d'un client…")}</option>
+              title={T("Voir le portail comme le client le voit", "See the portal as the client sees it")}>
+        <option value="" disabled>{T("👁 Ouvrir le portail d'un client…", "👁 Open a client's portal…")}</option>
         {clients.map((c) => (
           <option key={c.id} value={c.portal_token}>
             {c.name} — {c.engagement_score}/100
           </option>))}
       </select>
       <button style={S.lang} onClick={flipLang}
-              title={T("Passer en français", "Switch to English")}>
+              title={T("Switch to English", "Passer en français")}>
         🌐 {LANG.toUpperCase()}
       </button>
       <span style={{ color: "#64748b", fontSize: 11 }}>{edition}</span>
@@ -166,7 +174,7 @@ function TopBar({ clients, hot, edition }) {
     ]);
     if (r.ok) rich = await r.json();
     if (s.ok) hot = (await s.json()).counts.hot_leads;
-    if (h.ok) edition = `${T("edition", "édition")} ${(await h.json()).edition}`;
+    if (h.ok) edition = `${T("édition", "edition")} ${(await h.json()).edition}`;
     if (Array.isArray(rich) && rich.length) {
       window.__RADAR_CLIENTS__ = rich.map(toClient);
     }

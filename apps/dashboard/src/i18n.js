@@ -8,7 +8,8 @@
 export const LANG =
   (typeof localStorage !== "undefined" && localStorage.getItem("radar_lang")) || "fr";
 
-export const T = (en, fr) => (LANG === "fr" ? fr : en);
+// Same argument order as the ops console (dashboard.py): French first.
+export const T = (fr, en) => (LANG === "fr" ? fr : (en !== undefined ? en : fr));
 
 export const flipLang = () => {
   localStorage.setItem("radar_lang", LANG === "fr" ? "en" : "fr");

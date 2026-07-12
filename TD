@@ -1,0 +1,68 @@
+FSBO prospecting assistant — monitors DuProprio for new/stale listings, drafts personalized letters and call scripts (mail and calls are compliant; email blasts aren't)
+AI voice receptionist in Québécois French for missed calls
+---------------------------------------------------------------------------------------------
+This one's a bigger swing than the response agent — and the gap is real. Here's the landscape and where the ROI concentrates.
+
+**The gap**
+
+Lead gen for Canadian agents today is mostly ad-funnel lead resellers charging roughly $200 per lead, and the big-name platforms (BoldLeads, Real Geeks, Zurple) are built on American data infrastructure — ZIP codes and US MLS feeds that don't map to Canadian postal codes or regional boards. The most sophisticated category — predictive seller targeting — is exemplified by SmartZip, which predicts which homeowners are likely to sell 6–12 months out using consumer, MLS, and demographic data, but it's US-only. Nothing like it exists for Québec, partly because everyone assumes the data problem is unsolvable (Centris is closed).
+
+**The insight: it's solvable without Centris.** Québec has unusually rich *public* data — municipal assessment rolls (rôle d'évaluation, with owner names) and the Registre foncier (deeds and hypothecs: purchase date, price, mortgage lender and amount). From that you can compute tenure, equity growth, and — the killer signal — **mortgage renewal windows**, since Canadians renew every ~5 years and renewals at higher rates are a top trigger for selling. Parsing French notarial documents at scale is an LLM extraction problem. That's your moat: painful data engineering nobody else will do, squarely in your skillset.
+
+**Features ranked by ROI** (a single listing ≈ $12–15K commission in Montréal, so the math sells itself):
+
+1. **Likely-seller scoring engine** — "the 50 homeowners in your farm sector most likely to list in 12 months," ranked by tenure, equity, renewal window, life-stage proxies. Delivered with AI-personalized French letters and call scripts (direct mail needs no consent under CASL; that's your compliant channel). Exclusive-territory pricing at $300–500/mo, SmartZip-style.
+2. **Home valuation funnel** — "Évaluation gratuite" landing pages powered by a Québec AVM built on the same public data. Every captured address is a seller lead with express consent. Fastest to ship; feeds your response agent.
+3. **DuProprio conversion system** — monitor FSBO listings, score "likely to give up" signals (days on market, price cuts), generate outreach. Clear intent, publicly advertising sellers.
+4. **Sphere reactivation** — enrich a broker's past clients with property data ("their equity doubled, renewal due in March") and trigger reason-to-call alerts. Highest conversion rate of any lead source, near-zero acquisition cost.
+5. Ad-funnel-in-a-box — commodity; bundle it, don't lead with it.
+
+**Sequence:** ship #2 and #3 in weeks as the wedge, then build #1 as the defensible core. Before writing the data pipeline, run a concierge MVP — manually produce a "Top 50 likely sellers in Rosemont" report for three brokers and see if they'll pay $400 for it. That validates the product for the cost of a weekend.
+
+One honest caveat: registry documents cost money per pull, so batch economics and caching matter, and profiling individuals from public data needs a careful Law 25 posture (direct mail keeps you safe).
+
+Want me to spec the data pipeline and scoring model for #1, or the concierge MVP playbook first?
+
+---------------------------------------------------------------------------------------------
+A few genuinely underserved ones — I'll focus on gaps where Québec's regulatory, linguistic, and housing-stock specifics make US real-estate SaaS unusable, since that's the same durable moat as your restaurant-French play.
+
+**Sharpest gaps (Québec-specific, defensible):**
+
+1. **Plex / income-property deal analyzer.** Montréal is a plex city and investor brokers still underwrite in spreadsheets. A tool that ingests a rent roll and estimates achievable rent, cap rate, and cash flow *with Québec constraints baked in* — TAL rent-control limits, Section G (lowest-rent-paid) disclosure, cession-de-bail and renoviction risk, Welcome Tax, school/municipal taxes. No US tool models any of this. High defensibility, and it pairs naturally with Radar Vendeur's data.
+
+2. **Seller's-declaration & disclosure-liability assistant.** The Déclaration du vendeur is a top source of hidden-defect litigation and OACIQ discipline. An AI that interviews the seller thoroughly in French, flags latent-defect risks, and produces a defensible record reduces the broker's single biggest liability. Regulatory moat; verify current OACIQ form specifics before building.
+
+3. **Transaction coordination hub around the notarial closing.** Québec closes at a *notaire*, not a title company — coordination across broker, notary, mortgage broker, and inspector is fragmented, with the promesse d'achat's financing/inspection/notary deadlines tracked by hand. A Québec-tuned coordinator (not a rebadged US TC tool) fills a real workflow hole.
+
+**Strong, less regulatory:**
+
+4. **Bilingual AI CMA / listing-presentation generator.** Building a comparative market analysis is a universal time sink; the gap is a *French-first, Québec-data* version that produces a branded pricing deck from the broker's authorized Centris comps + assessment data. Wins listings, which is where the money is. Medium defensibility but high pull.
+
+5. **Post-close "client-for-life" engine.** Almost no one works retention. Triggered, bilingual reasons-to-reconnect tied to the triennial assessment roll, mortgage-renewal windows, and Welcome Tax — the highest-conversion, lowest-cost lead source, and it reuses Radar's exact data pipeline.
+
+6. **Semantic buyer-match agent** on the broker's own authorized listing feed — reads new listings and matches nuanced criteria ("plex with rentable basement near a métro under $X"), drafting a personalized "why this one." Most alert tools are dumb filters; this understands intent.
+
+**Higher-ACV, different buyer:**
+
+7. **Recruiting intelligence for team leaders / agencies.** Public Centris listing activity makes a broker's production and tenure observable; surface producers likely to switch agencies. Sells B2B2B to banner offices at a much higher price point than per-broker tools.
+
+The through-line: #1, #2, #3, and #5 are hard for anyone outside Québec to replicate, and #1/#5 share Radar Vendeur's data spine — so they compound into a suite rather than scattering effort. Of these, the plex analyzer has the clearest "brokers do this manually today and would pay tomorrow" signal.
+
+Want me to pressure-test any one of these — market-size it, spec the architecture, or run the same concierge-MVP validation playbook before you build?
+---------------------------------------------------------------------------------------------
+Beyond the realtor, the bigger unlock is that your data spine — public property data + French legal-document extraction + a compliance layer — resells into adjacent Québec verticals almost unchanged. Ranked by how much of what you've already built carries over:
+
+1. **Mortgage-renewal radar for mortgage brokers.** Literally Radar Vendeur re-skinned: the same hypothec dates from the Registre foncier, but the buyer is a courtier hypothécaire hunting renewals instead of listings — and Canada's renewal wave is peaking right now. Mortgage brokers are aggressive lead spenders; sell it as a data/software subscription rather than per-lead to stay clean of AMF referral-fee rules. ~95% code reuse, a second vertical for the price of a landing page.
+
+2. **TAL copilot for small landlords.** Montréal is a city of plex owners drowning in Tribunal administratif du logement mechanics: the annual rent-increase calculation, the mandatory lease form, Section G, cession de bail, non-payment recourses. Lower price point ($20–50/mo) but a huge base, recurring seasonal pain every renewal cycle, and CORPIQ as a distribution channel. Strategically sweet: plex owners are also your future *sellers* — Radar surfaces them later.
+
+3. **Condo-board (syndicat) compliance assistant.** Québec's condo-governance reforms made maintenance logbooks and contingency-fund planning mandatory, and thousands of small self-managed syndicates have no idea how to comply. AI for the carnet d'entretien, minutes, AGA prep, fund tracking (the fund *study* itself stays with qualified professionals — you're the record-keeping layer). Forced demand, but slower, budget-constrained buyers — verify the current phase-in deadlines before betting on it.
+
+4. **Zoning/density intelligence.** "Can I add a unit to this lot?" across Montréal's byzantine borough bylaws plus the provincial density reforms — an LLM-over-bylaws problem. Honest take: better as a killer feature of your plex analyzer or a per-report product than a standalone company.
+
+5. **Inspector report generation.** Photos + voice notes → structured bilingual inspection report. Acute time pain, smaller market, price-sensitive buyers. Middle of the pack.
+
+One important honest finding: the notary title-exam lane — which would otherwise top this list — is already taken. Paraito connects directly to the Registre foncier and automates title-search collection and chain-of-title reconstruction for Québec notaries, positioning itself as the first AI platform built specifically for them, claiming a 70% reduction on what's traditionally a 3–5 hour task per file, and Mentor AI Notaire analyzes the index aux immeubles, prior titles, and certificate of location, auto-detecting broken chains of title, undeclared servitudes, and active hypothecs. That's actually good news twice over: it proves people are paying for exactly your extraction thesis in Québec, and it tells you where *not* to build. The open adjacent seat is **pre-offer title intelligence for the buy side** — hypothec/servitude/transmission flags for investors before they even write an offer — which slots into the plex analyzer rather than competing with notary tools.
+
+If I were sequencing your next twelve months: Radar for realtors → same engine to mortgage brokers → plex-owner suite (analyzer + TAL copilot). Three revenue lines, one pipeline. Want me to spec the mortgage-broker variant, since it's the shortest path from code you already have?
+------------------------------------------------------------------------------------------

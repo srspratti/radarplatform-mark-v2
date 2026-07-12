@@ -17,9 +17,9 @@ const DISPLAY = "'Archivo', ui-sans-serif, sans-serif";
 const BODY = "'Public Sans', ui-sans-serif, system-ui, sans-serif";
 
 const STAGES = [
-  T("Onboarding", "Intégration"), T("Search", "Recherche"), T("Visits", "Visites"),
-  T("Offer", "Offre"), T("Accepted", "Acceptée"), T("Conditions", "Conditions"),
-  T("Notary", "Notaire"), T("Closed", "Clôturé"),
+  T("Intégration", "Onboarding"), T("Recherche", "Search"), T("Visites", "Visits"),
+  T("Offre", "Offer"), T("Acceptée", "Accepted"), T("Conditions", "Conditions"),
+  T("Notaire", "Notary"), T("Clôturé", "Closed"),
 ];
 const AVATARS = ["#14532D", "#7C2D12", "#1E3A8A", "#701A75", "#0C4A6E", "#78350F", "#312E81", "#134E4A", "#7F1D1D", "#3F3F46"];
 
@@ -168,9 +168,9 @@ const CLIENTS = (typeof window !== "undefined" && window.__RADAR_CLIENTS__) || [
 ];
 
 const ALERTS = [
-  { id: 6, kind: "quiet", txt: ["Julie Lavoie", T(" went quiet 6 days after her 2nd visit — score down 18. Send a nudge.", " est silencieuse depuis 6 jours après sa 2e visite — score en baisse de 18. Envoyer une relance.")] },
-  { id: 4, kind: "deadline", txt: ["Émilie Roy", T(" — financing condition due Monday, Jul 13.", " — condition de financement due lundi 13 juil.")] },
-  { id: 7, kind: "surge", txt: ["David Chen", T(" viewed 14 listings this week (2×). Ready for a first visit.", " a consulté 14 fiches cette semaine (2×). Prêt pour une première visite.")] },
+  { id: 6, kind: "quiet", txt: ["Julie Lavoie", T(" est silencieuse depuis 6 jours après sa 2e visite — score en baisse de 18. Envoyer une relance.", " went quiet 6 days after her 2nd visit — score down 18. Send a nudge.")] },
+  { id: 4, kind: "deadline", txt: ["Émilie Roy", T(" — condition de financement due lundi 13 juil.", " — financing condition due Monday, Jul 13.")] },
+  { id: 7, kind: "surge", txt: ["David Chen", T(" a consulté 14 fiches cette semaine (2×). Prêt pour une première visite.", " viewed 14 listings this week (2×). Ready for a first visit.")] },
 ];
 
 const SEED_MSGS = {
@@ -183,7 +183,7 @@ const SEED_MSGS = {
 
 // ---------------------------------------------------------------- helpers
 const heat = (s) => (s >= 65 ? HOT : s >= 40 ? WARM : COOL);
-const band = (s) => (s >= 65 ? T("Hot", "Chaud") : s >= 40 ? T("Warm", "Tiède") : T("Cooling", "Refroidit"));
+const band = (s) => (s >= 65 ? T("Chaud", "Hot") : s >= 40 ? T("Tiède", "Warm") : T("Refroidit", "Cooling"));
 const seg = (c) =>
   c.declined ? "reengage"
   : c.stage === 3 ? "offers"
@@ -208,9 +208,9 @@ function Eyebrow({ children }) {
 }
 
 function Trend({ v, size = 12 }) {
-  if (v > 0) return (<span className="inline-flex items-center gap-1 text-emerald-700" style={{ fontSize: 11 }}><TrendingUp size={size} />+{v} {T("wk", "sem")}</span>);
-  if (v < 0) return (<span className="inline-flex items-center gap-1 text-red-600" style={{ fontSize: 11 }}><TrendingDown size={size} />{v} {T("wk", "sem")}</span>);
-  return (<span className="inline-flex items-center gap-1 text-slate-400" style={{ fontSize: 11 }}><Minus size={size} />{T("flat", "stable")}</span>);
+  if (v > 0) return (<span className="inline-flex items-center gap-1 text-emerald-700" style={{ fontSize: 11 }}><TrendingUp size={size} />+{v} {T("sem", "wk")}</span>);
+  if (v < 0) return (<span className="inline-flex items-center gap-1 text-red-600" style={{ fontSize: 11 }}><TrendingDown size={size} />{v} {T("sem", "wk")}</span>);
+  return (<span className="inline-flex items-center gap-1 text-slate-400" style={{ fontSize: 11 }}><Minus size={size} />{T("stable", "flat")}</span>);
 }
 
 function ScoreRing({ score, size = 84 }) {
@@ -261,7 +261,7 @@ function Stepper({ stage, declined }) {
       </div>
       {declined && (
         <div className="mt-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ ...CHIP_TONES.red, fontSize: 11 }}>
-          <XCircle size={12} /> {T("Offer declined · back in active search", "Offre refusée · retour en recherche active")}
+          <XCircle size={12} /> {T("Offre refusée · retour en recherche active", "Offer declined · back in active search")}
         </div>
       )}
     </div>
@@ -270,17 +270,17 @@ function Stepper({ stage, declined }) {
 
 function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
   const parts = [
-    [T("Browsing activity", "Navigation"), c.breakdown.browsing, 25],
-    [T("Responsiveness", "Réactivité"), c.breakdown.comm, 20],
-    [T("Visits", "Visites"), c.breakdown.visits, 30],
-    [T("Offer activity", "Offres"), c.breakdown.offers, 25],
+    [T("Navigation", "Browsing activity"), c.breakdown.browsing, 25],
+    [T("Réactivité", "Responsiveness"), c.breakdown.comm, 20],
+    [T("Visites", "Visits"), c.breakdown.visits, 30],
+    [T("Offres", "Offer activity"), c.breakdown.offers, 25],
   ];
   const ai = (c.id - 1) % AVATARS.length;
   return (
     <div className="bg-white rounded-2xl p-5 space-y-5" style={{ border: `1px solid ${LINE}` }}>
       {onBack && (
         <button onClick={onBack} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
-          <ChevronLeft size={16} /> {T("All clients", "Tous les clients")}
+          <ChevronLeft size={16} /> {T("Tous les clients", "All clients")}
         </button>
       )}
 
@@ -310,7 +310,7 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
             {band(c.score)}
           </div>
           <div className="mt-1.5"><Trend v={c.trend} /></div>
-          <div className="text-slate-400 mt-1" style={{ fontSize: 11 }}>{T(`Last activity ${c.last} ago`, `Dernière activité il y a ${c.last}`)}</div>
+          <div className="text-slate-400 mt-1" style={{ fontSize: 11 }}>{T(`Dernière activité il y a ${c.last}`, `Last activity ${c.last} ago`)}</div>
         </div>
       </div>
 
@@ -318,17 +318,17 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
           texts go out from their real number; VoIP sim is the no-phone fallback */}
       <div className="flex gap-2">
         <button onClick={() => { if (c.phone) window.location.href = "tel:" + c.phone.replace(/[^+\d]/g, ""); else onCall(); }}
-          title={c.phone ? T(`Call ${c.phone} — from your phone number`, `Appeler ${c.phone} — depuis votre numéro`) : T("Demo call", "Appel démo")}
+          title={c.phone ? T(`Appeler ${c.phone} — depuis votre numéro`, `Call ${c.phone} — from your phone number`) : T("Appel démo", "Demo call")}
           className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold text-white"
           style={{ background: INK }}>
-          <Phone size={15} /> {T("Call", "Appeler")}
+          <Phone size={15} /> {T("Appeler", "Call")}
         </button>
         {c.phone && (
           <button onClick={() => { window.location.href = "sms:" + c.phone.replace(/[^+\d]/g, ""); }}
-            title={T(`Text ${c.phone} — from your phone number`, `Texter ${c.phone} — depuis votre numéro`)}
+            title={T(`Texter ${c.phone} — depuis votre numéro`, `Text ${c.phone} — from your phone number`)}
             className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold bg-white text-slate-800 hover:bg-slate-50"
             style={{ border: `1px solid #CBD5E1` }}>
-            <Phone size={15} /> {T("Text", "Texto")}
+            <Phone size={15} /> {T("Texto", "Text")}
           </button>
         )}
         <button onClick={onChat}
@@ -343,13 +343,13 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
           <div className="flex items-center gap-2.5">
             <PhoneCall size={17} className="animate-pulse" style={{ color: INK }} />
             <div>
-              <div className="text-sm font-semibold" style={{ color: INK }}>{T(`Calling ${c.name.split(" ")[0]}…`, `Appel à ${c.name.split(" ")[0]}…`)}</div>
-              <div className="text-slate-500" style={{ fontSize: 11 }}>{T("Browser VoIP · logs to timeline & CRM", "VoIP navigateur · consigné au fil d'activité et au CRM")}</div>
+              <div className="text-sm font-semibold" style={{ color: INK }}>{T(`Appel à ${c.name.split(" ")[0]}…`, `Calling ${c.name.split(" ")[0]}…`)}</div>
+              <div className="text-slate-500" style={{ fontSize: 11 }}>{T("VoIP navigateur · consigné au fil d'activité et au CRM", "Browser VoIP · logs to timeline & CRM")}</div>
             </div>
           </div>
           <button onClick={onEndCall} className="rounded-lg bg-white px-2.5 py-1 font-medium text-red-600"
             style={{ fontSize: 12, border: "1px solid #F6CFCF" }}>
-            {T("End", "Raccrocher")}
+            {T("Raccrocher", "End")}
           </button>
         </div>
       )}
@@ -362,7 +362,7 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
 
       {/* score breakdown */}
       <div>
-        <Eyebrow>{T("Score breakdown", "Détail du score")}</Eyebrow>
+        <Eyebrow>{T("Détail du score", "Score breakdown")}</Eyebrow>
         <div className="mt-2.5 space-y-2">
           {parts.map(([label, v, max]) => (
             <div key={label} className="flex items-center gap-3">
@@ -374,12 +374,12 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
             </div>
           ))}
         </div>
-        <div className="text-slate-400 mt-2" style={{ fontSize: 11 }}>{T("Decays with inactivity · half-life 10 days", "Décroît avec l'inactivité · demi-vie 10 jours")}</div>
+        <div className="text-slate-400 mt-2" style={{ fontSize: 11 }}>{T("Décroît avec l'inactivité · demi-vie 10 jours", "Decays with inactivity · half-life 10 days")}</div>
       </div>
 
       {/* raw signals */}
       <div className="grid grid-cols-4 gap-2">
-        {[[T("Views", "Vues"), c.signals.views, Eye], [T("Saves", "Favoris"), c.signals.saves, Bookmark], [T("Visits", "Visites"), c.signals.visits, CalendarCheck], [T("Offers", "Offres"), c.signals.offers, FileText]].map(([label, v, Icon]) => (
+        {[[T("Vues", "Views"), c.signals.views, Eye], [T("Favoris", "Saves"), c.signals.saves, Bookmark], [T("Visites", "Visits"), c.signals.visits, CalendarCheck], [T("Offres", "Offers"), c.signals.offers, FileText]].map(([label, v, Icon]) => (
           <div key={label} className="rounded-xl p-2 text-center" style={{ background: "#F8FAFC", border: `1px solid ${LINE}` }}>
             <Icon size={14} className="mx-auto text-slate-400" />
             <div className="font-semibold tabular-nums text-sm mt-0.5" style={{ color: INK }}>{v}</div>
@@ -390,7 +390,7 @@ function Detail({ c, onBack, onChat, onCall, calling, onEndCall }) {
 
       {/* timeline */}
       <div>
-        <Eyebrow>{T("Recent activity", "Activité récente")}</Eyebrow>
+        <Eyebrow>{T("Activité récente", "Recent activity")}</Eyebrow>
         <div className="mt-2.5 space-y-3">
           {c.timeline.map((e, i) => {
             const Icon = TL_ICONS[e.t] || Clock;
@@ -437,12 +437,12 @@ export default function RealtorDashboard() {
   const closings = CLIENTS.filter((c) => c.stage === 6).length;
 
   const FILTERS = [
-    ["all", T("All", "Tous"), CLIENTS.length],
-    ["browsing", T("Browsing", "En navigation"), CLIENTS.filter((c) => seg(c) === "browsing").length],
-    ["visiting", T("Visiting", "En visites"), CLIENTS.filter((c) => seg(c) === "visiting").length],
-    ["offers", T("Offer submitted", "Offre déposée"), CLIENTS.filter((c) => seg(c) === "offers").length],
-    ["transaction", T("In transaction", "En transaction"), CLIENTS.filter((c) => seg(c) === "transaction").length],
-    ["reengage", T("Re-engage", "À relancer"), CLIENTS.filter((c) => seg(c) === "reengage").length],
+    ["all", T("Tous", "All"), CLIENTS.length],
+    ["browsing", T("En navigation", "Browsing"), CLIENTS.filter((c) => seg(c) === "browsing").length],
+    ["visiting", T("En visites", "Visiting"), CLIENTS.filter((c) => seg(c) === "visiting").length],
+    ["offers", T("Offre déposée", "Offer submitted"), CLIENTS.filter((c) => seg(c) === "offers").length],
+    ["transaction", T("En transaction", "In transaction"), CLIENTS.filter((c) => seg(c) === "transaction").length],
+    ["reengage", T("À relancer", "Re-engage"), CLIENTS.filter((c) => seg(c) === "reengage").length],
   ];
 
   const list = CLIENTS.filter((c) => filter === "all" || seg(c) === filter).sort((a, b) => b.score - a.score);
@@ -476,18 +476,18 @@ export default function RealtorDashboard() {
         {/* header */}
         <header className="flex items-start justify-between gap-4 mb-6">
           <div>
-            <Eyebrow>{T("Realtor console", "Console courtier")} · {T("Thursday, July 9", "jeudi 9 juillet")}</Eyebrow>
+            <Eyebrow>{T("Console courtier", "Realtor console")} · {T("jeudi 9 juillet", "Thursday, July 9")}</Eyebrow>
             <h1 className="mt-1 tracking-tight" style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 26 }}>
               Bonjour, Danny
             </h1>
-            <p className="text-sm text-slate-500 mt-0.5">{T(`${hot} clients hot · 3 alerts · 1 closing at the notary this month`, `${hot} clients chauds · 3 alertes · 1 clôture chez le notaire ce mois-ci`)}</p>
+            <p className="text-sm text-slate-500 mt-0.5">{T(`${hot} clients chauds · 3 alertes · 1 clôture chez le notaire ce mois-ci`, `${hot} clients hot · 3 alerts · 1 closing at the notary this month`)}</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden sm:flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-slate-500" style={{ border: `1px solid ${LINE}`, fontSize: 11 }}>
               <span className="rounded-full bg-emerald-500" style={{ width: 6, height: 6 }} />
-              {T("Synced · Centris clients · added via Radar", "Synchronisé · clients Centris · ajoutés via Radar")}
+              {T("Synchronisé · clients Centris · ajoutés via Radar", "Synced · Centris clients · added via Radar")}
             </div>
-            <button className="relative rounded-full bg-white p-2.5" style={{ border: `1px solid ${LINE}` }} aria-label={T("Alerts", "Alertes")}>
+            <button className="relative rounded-full bg-white p-2.5" style={{ border: `1px solid ${LINE}` }} aria-label={T("Alertes", "Alerts")}>
               <Bell size={16} className="text-slate-600" />
               <span className="absolute rounded-full text-white flex items-center justify-center"
                 style={{ top: -3, right: -3, width: 15, height: 15, fontSize: 9, background: "#DC2626", fontWeight: 700 }}>3</span>
@@ -498,10 +498,10 @@ export default function RealtorDashboard() {
         {/* stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {[
-            [T("Centris clients", "Clients Centris"), CLIENTS.length, T("added via Radar", "ajoutés via Radar")],
-            [T("Hot right now", "Chauds en ce moment"), hot, T("score ≥ 65", "score ≥ 65")],
-            [T("Offers in play", "Offres en cours"), offersInPlay, T("1 counter pending", "1 contre-offre en attente")],
-            [T("Closing this month", "Clôtures ce mois-ci"), closings, T("Jul 21 · notary", "21 juil · notaire")],
+            [T("Clients Centris", "Centris clients"), CLIENTS.length, T("ajoutés via Radar", "added via Radar")],
+            [T("Chauds en ce moment", "Hot right now"), hot, T("score ≥ 65", "score ≥ 65")],
+            [T("Offres en cours", "Offers in play"), offersInPlay, T("1 contre-offre en attente", "1 counter pending")],
+            [T("Clôtures ce mois-ci", "Closing this month"), closings, T("21 juil · notaire", "Jul 21 · notary")],
           ].map(([label, v, sub]) => (
             <div key={label} className="rounded-2xl bg-white p-4" style={{ border: `1px solid ${LINE}` }}>
               <div className="text-slate-500" style={{ fontSize: 12 }}>{label}</div>
@@ -568,7 +568,7 @@ export default function RealtorDashboard() {
                       <span className="inline-flex items-center gap-1"><FileText size={12} />{c.signals.offers}</span>
                     </div>
                     <span className="rounded-full px-2 py-0.5 whitespace-nowrap shrink-0" style={{ ...stageChipStyle(c), fontSize: 11 }}>
-                      {c.declined ? T("Declined", "Refusée") : STAGES[c.stage]}
+                      {c.declined ? T("Refusée", "Declined") : STAGES[c.stage]}
                     </span>
                     <span className="hidden sm:block text-slate-400 text-right shrink-0" style={{ fontSize: 11, width: 42 }}>{c.last}</span>
                     <div className="text-right shrink-0" style={{ width: 52 }}>
@@ -580,8 +580,7 @@ export default function RealtorDashboard() {
               })}
             </div>
             <div className="p-3 text-center text-slate-400" style={{ fontSize: 11, borderTop: `1px solid ${LINE}` }}>
-              {T("Engagement = browsing + responsiveness + visits + offers, with 10-day decay · events from website, CRM, Matrix & chat",
-                 "Engagement = navigation + réactivité + visites + offres, avec décroissance sur 10 jours · événements du site, du CRM, de Matrix et du chat")}
+              {T("Engagement = navigation + réactivité + visites + offres, avec décroissance sur 10 jours · événements du site, du CRM, de Matrix et du chat", "Engagement = browsing + responsiveness + visits + offers, with 10-day decay · events from website, CRM, Matrix & chat")}
             </div>
           </div>
 
@@ -624,10 +623,10 @@ export default function RealtorDashboard() {
                 <div className="font-semibold text-sm truncate" style={{ color: INK }}>{selected.name}</div>
                 <div className="flex items-center gap-1.5 text-slate-400" style={{ fontSize: 11 }}>
                   <span className="rounded-full bg-emerald-500" style={{ width: 6, height: 6 }} />
-                  {T("Two-way client chat · syncs to timeline & CRM", "Chat client bidirectionnel · synchronisé au fil d'activité et au CRM")}
+                  {T("Chat client bidirectionnel · synchronisé au fil d'activité et au CRM", "Two-way client chat · syncs to timeline & CRM")}
                 </div>
               </div>
-              <button onClick={() => setChatOpen(false)} className="ml-auto rounded-lg p-1.5 hover:bg-slate-100" aria-label={T("Close chat", "Fermer le chat")}>
+              <button onClick={() => setChatOpen(false)} className="ml-auto rounded-lg p-1.5 hover:bg-slate-100" aria-label={T("Fermer le chat", "Close chat")}>
                 <X size={16} className="text-slate-500" />
               </button>
             </div>
@@ -635,8 +634,7 @@ export default function RealtorDashboard() {
             <div ref={chatBodyRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ background: "#F8FAFC" }}>
               {cMsgs.length === 0 && !typing && (
                 <div className="text-center text-slate-400 mt-8" style={{ fontSize: 12 }}>
-                  {T(`Start the conversation — ${selected.name.split(" ")[0]} sees this in their client portal.`,
-                     `Amorcez la conversation — ${selected.name.split(" ")[0]} le voit dans son portail client.`)}
+                  {T(`Amorcez la conversation — ${selected.name.split(" ")[0]} le voit dans son portail client.`, `Start the conversation — ${selected.name.split(" ")[0]} sees this in their client portal.`)}
                 </div>
               )}
               {cMsgs.map((m, i) => (
@@ -655,7 +653,7 @@ export default function RealtorDashboard() {
               {typing && (
                 <div className="flex justify-start">
                   <div className="rounded-2xl px-3 py-2 text-sm text-slate-400 animate-pulse bg-white" style={{ border: `1px solid ${LINE}` }}>
-                    {T(`${selected.name.split(" ")[0]} is typing…`, `${selected.name.split(" ")[0]} écrit…`)}
+                    {T(`${selected.name.split(" ")[0]} écrit…`, `${selected.name.split(" ")[0]} is typing…`)}
                   </div>
                 </div>
               )}
@@ -666,11 +664,11 @@ export default function RealtorDashboard() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && send()}
-                placeholder={T(`Message ${selected.name.split(" ")[0]}…`, `Écrire à ${selected.name.split(" ")[0]}…`)}
+                placeholder={T(`Écrire à ${selected.name.split(" ")[0]}…`, `Message ${selected.name.split(" ")[0]}…`)}
                 className="flex-1 rounded-xl px-3 py-2 text-sm focus:outline-none"
                 style={{ border: "1px solid #CBD5E1" }}
               />
-              <button onClick={send} className="rounded-xl p-2.5 text-white" style={{ background: INK }} aria-label={T("Send", "Envoyer")}>
+              <button onClick={send} className="rounded-xl p-2.5 text-white" style={{ background: INK }} aria-label={T("Envoyer", "Send")}>
                 <Send size={15} />
               </button>
             </div>

@@ -45,6 +45,49 @@ const { useState, useEffect, useCallback, useRef } = React;
 let LANG = localStorage.getItem("radar_lang") || "fr";
 const T = (fr, en) => (LANG === "fr" ? fr : (en !== undefined ? en : fr));
 
+// Server data arrives in French (stage labels, sublabels, priority hints,
+// alert sentences). These maps translate that known vocabulary client-side
+// when the console is in EN mode; unknown values pass through untouched.
+const STAGE_EN = { nouveau:"New lead", contacte:"Contacted",
+  client_actif:"Client (Centris)", en_reperage:"Scouting",
+  en_visites:"Touring", offre:"Offer submitted",
+  transaction:"In transaction", cloture:"Closed" };
+const STAGE_FR2EN = { "Nouveau lead":"New lead", "Contacté":"Contacted",
+  "Client (Centris)":"Client (Centris)", "En repérage":"Scouting",
+  "En visites":"Touring", "Offre soumise":"Offer submitted",
+  "En transaction":"In transaction", "Clôturé":"Closed" };
+const SUB_EN = { "Alerte Centris":"Centris alert", "Demande de visite":"Visit request",
+  "Formulaire site":"Website form", "Landing Vitrine":"Vitrine landing",
+  "Référence gym":"Gym referral", "Référence hockey":"Hockey referral" };
+const PHRASE_EN = [
+  ["Appeler maintenant","Call now"], ["Contacter aujourd'hui","Contact today"],
+  ["Suivi cette semaine","Follow up this week"], ["Séquence de nurture","Nurture sequence"],
+  ["préqualifié","pre-qualified"], ["veut visiter","wants to visit"],
+  ["intention claire","clear intent"], ["budget mentionné","budget mentioned"],
+  ["urgence","urgent"], ["— priorité ","— priority "],
+  ["— client inactif, à relancer","— inactive client, re-engage"],
+  ["writeback(s) en attente vers FUB","writeback(s) pending to FUB"],
+];
+const trStage = (code, fallback) => LANG==="fr" ? fallback : (STAGE_EN[code]||fallback);
+const trStageLabel = (lbl) => LANG==="fr" ? lbl : (STAGE_FR2EN[lbl]||lbl);
+const trSub = (s) => (LANG==="fr"||!s) ? s : (SUB_EN[s]||s);
+const trTxt = (s) => { if (LANG==="fr"||!s) return s;
+  let out=s; PHRASE_EN.forEach(([f,e])=>{ out=out.split(f).join(e); }); return out; };
+const FAM_LABEL = { intake:["admission","intake"], browsing:["navigation","browsing"],
+  communication:["communication","communication"], visits:["visites","visits"],
+  offers:["offres","offers"], transaction:["transaction","transaction"], ops:["ops","ops"] };
+const trFam = (k) => { const p=FAM_LABEL[k]; return p ? (LANG==="fr"?p[0]:p[1]) : k; };
+// The office agent's monthly report is a fixed French markdown template.
+const REPORT_EN = [
+  ["Rapport mensuel","Monthly report"], ["Transactions clôturées","Closed transactions"],
+  ["Commissions brutes","Gross commissions"], ["TPS (5 %)","GST (5%)"],
+  ["TVQ (9,975 %)","QST (9.975%)"], ["Dépenses","Expenses"],
+  ["Net (avant remises de taxes)","Net (before tax remittances)"], ["Synthèse","Summary"],
+];
+const trReport = (s) => { if (LANG==="fr"||!s) return s;
+  let out=s; REPORT_EN.concat(Object.entries(STAGE_FR2EN))
+    .forEach(([f,e])=>{ out=out.split(f).join(e); }); return out; };
+
 // Funnel chips — each lead names the funnel it came from (Danny's existing
 // pipes today; new sources plug in here as they are added).
 const SOURCE_META = {
@@ -84,7 +127,7 @@ const since = (iso) => {
 function SourceChip({source, sublabel}) {
   const m = SOURCE_META[source] || {label:source, cls:"bg-slate-500/15 text-slate-300 border-slate-500/40"};
   return <span className={"mono text-[10px] px-2 py-0.5 rounded border "+m.cls}>
-    {m.label}{sublabel ? <span className="opacity-70"> · {sublabel}</span> : null}</span>;
+    {m.label}{sublabel ? <span className="opacity-70"> · {trSub(sublabel)}</span> : null}</span>;
 }
 
 function Ring({score, size=54}) {
@@ -204,7 +247,7 @@ function RadarView({toast, on, feats}) {
     </div>
     {sum.alerts.length>0 && <div className="panel p-4">
       <div className="mono text-[11px] amber mb-2">{T("▮ RADAR — INTELLIGENCE D'ACHAT · signaux prioritaires","▮ RADAR — BUYING INTELLIGENCE · priority signals")}</div>
-      {sum.alerts.map((a,i)=><div key={i} className="text-sm py-1 border-b border-[var(--line)]/40 last:border-0">{a}</div>)}
+      {sum.alerts.map((a,i)=><div key={i} className="text-sm py-1 border-b border-[var(--line)]/40 last:border-0">{trTxt(a)}</div>)}
     </div>}
     <div className="panel p-4">
       <div className="flex items-center justify-between mb-1">
@@ -235,7 +278,7 @@ function RadarView({toast, on, feats}) {
                 <span className="font-medium">{l.name}</span>
                 <SourceChip source={l.source} sublabel={l.sublabel}/>
               </div>
-              <div className="mono text-[11px] text-[var(--mute)] mt-0.5 truncate">{l.priority_hint}{l.notes?" — "+l.notes.slice(0,70):""}</div>
+              <div className="mono text-[11px] text-[var(--mute)] mt-0.5 truncate">{trTxt(l.priority_hint)}{l.notes?" — "+l.notes.slice(0,70):""}</div>
               <div className="mt-1.5"><PriorityBar score={l.priority_score}/></div>
             </div>
             <div className="flex gap-2 shrink-0 items-center flex-wrap">
@@ -261,7 +304,7 @@ function RadarView({toast, on, feats}) {
           <div key={c.id} className="panel2 p-3 flex flex-col items-center text-center gap-1">
             <Ring score={c.engagement_score}/>
             <div className="text-xs font-medium truncate w-full">{c.name}{c.dormant?" 😴":""}</div>
-            <div className="mono text-[9px] text-[var(--mute)]">{c.stage_label}</div>
+            <div className="mono text-[9px] text-[var(--mute)]">{trStage(c.stage, c.stage_label)}</div>
           </div>))}
       </div>
       <div className="mono text-[10px] text-[var(--mute)] mt-3">
@@ -394,14 +437,14 @@ function ContactsView({toast, on, feats}) {
             <div className="flex items-center gap-3">
               <Ring score={c.lifecycle==="client"?c.engagement_score:c.priority_score}/>
               <div className="min-w-0">
-                <div className="font-medium truncate">{c.name} {c.dormant && <span title="À relancer">😴</span>}</div>
+                <div className="font-medium truncate">{c.name} {c.dormant && <span title={T("À relancer","Re-engage")}>😴</span>}</div>
                 <div className="mt-1 flex flex-wrap gap-1.5 items-center">
                   <span className={"mono text-[9px] px-1.5 py-0.5 rounded border "+(c.lifecycle==="client"
                     ?"bg-emerald-400/10 text-emerald-300 border-emerald-400/40"
                     :"bg-amber-400/10 text-amber-300 border-amber-400/40")}>
                     {c.lifecycle==="client"?T("CLIENT CENTRIS","CENTRIS CLIENT"):"LEAD"}</span>
                   <SourceChip source={c.source} sublabel={c.sublabel}/>
-                  {c.lifecycle==="client" && <span className="mono text-[10px] px-2 py-0.5 rounded bg-[#123542] text-[var(--ink)]">{c.stage_label}</span>}
+                  {c.lifecycle==="client" && <span className="mono text-[10px] px-2 py-0.5 rounded bg-[#123542] text-[var(--ink)]">{trStage(c.stage, c.stage_label)}</span>}
                 </div>
               </div>
             </div>
@@ -414,7 +457,7 @@ function ContactsView({toast, on, feats}) {
             {c.email && <a href={"mailto:"+c.email} title={c.email}
               className="mono text-[10px] px-2.5 py-1 rounded border border-[var(--line)] hover:border-sky-400">{T("✉ Courriel","✉ Email")}</a>}
             {on && on("call_capture") && <button onClick={()=>callNote(c)}
-              title="Consigner une note d'appel (résumé IA → chronologie + FUB)"
+              title={T("Consigner une note d'appel (résumé IA → chronologie + FUB)","Log a call note (AI summary → timeline + FUB)")}
               className="mono text-[10px] px-2.5 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">📝 Note</button>}
           </div>}
         </div>))}
@@ -428,11 +471,11 @@ function ContactsView({toast, on, feats}) {
             <div className="text-xl font-semibold">{sel.name}</div>
             <div className="mono text-[11px] text-[var(--mute)] flex items-center gap-2 flex-wrap">
               <span>{sel.email} · {sel.phone}</span>
-              {sel.phone && <a href={"tel:"+sel.phone.replace(/[^+\d]/g,"")} title="Appeler — depuis votre téléphone"
+              {sel.phone && <a href={"tel:"+sel.phone.replace(/[^+\d]/g,"")} title={T("Appeler — depuis votre téléphone","Call — from your phone")}
                 className="px-2 py-0.5 rounded border border-[var(--line)] hover:border-emerald-400 text-[var(--ink)]">📞</a>}
-              {sel.phone && <a href={"sms:"+sel.phone.replace(/[^+\d]/g,"")} title="Texto — depuis votre téléphone"
+              {sel.phone && <a href={"sms:"+sel.phone.replace(/[^+\d]/g,"")} title={T("Texto — depuis votre téléphone","Text — from your phone")}
                 className="px-2 py-0.5 rounded border border-[var(--line)] hover:border-emerald-400 text-[var(--ink)]">💬</a>}
-              {sel.email && <a href={"mailto:"+sel.email} title="Courriel"
+              {sel.email && <a href={"mailto:"+sel.email} title={T("Courriel","Email")}
                 className="px-2 py-0.5 rounded border border-[var(--line)] hover:border-sky-400 text-[var(--ink)]">✉</a>}
             </div>
             <div className="mt-2 flex gap-2 items-center flex-wrap">
@@ -456,7 +499,7 @@ function ContactsView({toast, on, feats}) {
         </div>
         <div className="panel p-3 mt-4">
           <div className="mono text-[10px] amber mb-1">{T("▮ PIPELINE QUÉBEC (dérivé du journal d'événements)","▮ QUÉBEC PIPELINE (derived from the event log)")}</div>
-          <Stepper order={sel.stage_order} labels={sel.stage_labels} current={sel.stage}/>
+          <Stepper order={sel.stage_order} labels={LANG==="fr"?sel.stage_labels:STAGE_EN} current={sel.stage}/>
         </div>
         <div className="grid grid-cols-2 gap-3 mt-3">
           <div className="panel p-3">
@@ -465,7 +508,7 @@ function ContactsView({toast, on, feats}) {
               <div className="text-xs text-[var(--mute)]">{T("Aucune activité client pondérée.","No weighted client activity.")}</div>}
             {Object.entries(sel.score_breakdown).map(([f,v])=>(
               <div key={f} className="flex justify-between mono text-[11px] py-0.5">
-                <span className="text-[var(--mute)]">{f}</span><span>{v} pts</span></div>))}
+                <span className="text-[var(--mute)]">{trFam(f)}</span><span>{v} pts</span></div>))}
             <div className="mono text-[10px] text-[var(--mute)] mt-2 pt-2 border-t border-[var(--line)]/50">
               {T("acteur=client uniquement · demi-vie 7 j","actor=client only · 7-day half-life")}</div>
           </div>
@@ -540,32 +583,32 @@ function OfficePanel({toast}) {
   useEffect(()=>{ run(); },[]);
   return <div className="panel p-4">
     <div className="flex items-end gap-2 mb-3">
-      <div><div className="mono text-[10px] text-[var(--mute)]">ANNÉE</div>
+      <div><div className="mono text-[10px] text-[var(--mute)]">{T("ANNÉE","YEAR")}</div>
         <input type="number" value={y} onChange={e=>setY(+e.target.value)}
           className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm w-24"/></div>
-      <div><div className="mono text-[10px] text-[var(--mute)]">MOIS</div>
+      <div><div className="mono text-[10px] text-[var(--mute)]">{T("MOIS","MONTH")}</div>
         <input type="number" min="1" max="12" value={m} onChange={e=>setM(+e.target.value)}
           className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm w-16"/></div>
-      <button onClick={run} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">Générer le rapport</button>
+      <button onClick={run} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">{T("Générer le rapport","Generate report")}</button>
     </div>
     {rep && <div className="grid md:grid-cols-2 gap-3">
       <div className="panel2 p-3 mono text-[12px] space-y-1">
         <div className="amber text-[10px]">▮ FINANCES — {rep.period}</div>
-        <div>Transactions clôturées: <b>{rep.deals_closed}</b></div>
-        <div>Commissions brutes: <b>{rep.commission_gross.toLocaleString("fr-CA")} $</b></div>
-        <div>TPS 5 %: {rep.taxes.tps_5.toLocaleString("fr-CA")} $ · TVQ 9,975 %: {rep.taxes.tvq_9975.toLocaleString("fr-CA")} $</div>
-        <div>Dépenses: {rep.expenses_total.toLocaleString("fr-CA")} $</div>
-        <div className="pt-1 border-t border-[var(--line)]/50">Net (avant remises): <b className="amber">{rep.net_before_tax_remittance.toLocaleString("fr-CA")} $</b></div>
+        <div>{T("Transactions clôturées","Closed transactions")}: <b>{rep.deals_closed}</b></div>
+        <div>{T("Commissions brutes","Gross commissions")}: <b>{rep.commission_gross.toLocaleString("fr-CA")} $</b></div>
+        <div>{T("TPS 5 %","GST 5%")}: {rep.taxes.tps_5.toLocaleString("fr-CA")} $ · {T("TVQ 9,975 %","QST 9.975%")}: {rep.taxes.tvq_9975.toLocaleString("fr-CA")} $</div>
+        <div>{T("Dépenses","Expenses")}: {rep.expenses_total.toLocaleString("fr-CA")} $</div>
+        <div className="pt-1 border-t border-[var(--line)]/50">{T("Net (avant remises)","Net (before remittances)")}: <b className="amber">{rep.net_before_tax_remittance.toLocaleString("fr-CA")} $</b></div>
       </div>
       <div className="panel2 p-3 mono text-[12px]">
         <div className="amber text-[10px] mb-1">▮ PIPELINE</div>
         {Object.entries(rep.pipeline_snapshot).map(([k,v])=>
-          <div key={k} className="flex justify-between py-0.5"><span className="text-[var(--mute)]">{k}</span><span>{v}</span></div>)}
-        <div className="amber text-[10px] mt-2 mb-1">▮ ACTIVITÉ (événements/mois)</div>
+          <div key={k} className="flex justify-between py-0.5"><span className="text-[var(--mute)]">{trStageLabel(k)}</span><span>{v}</span></div>)}
+        <div className="amber text-[10px] mt-2 mb-1">{T("▮ ACTIVITÉ (événements/mois)","▮ ACTIVITY (events/month)")}</div>
         {Object.entries(rep.activity_by_family).map(([k,v])=>
-          <div key={k} className="flex justify-between py-0.5"><span className="text-[var(--mute)]">{k}</span><span>{v}</span></div>)}
+          <div key={k} className="flex justify-between py-0.5"><span className="text-[var(--mute)]">{trFam(k)}</span><span>{v}</span></div>)}
       </div>
-      <pre className="md:col-span-2 panel2 p-3 mono text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{rep.markdown}</pre>
+      <pre className="md:col-span-2 panel2 p-3 mono text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{trReport(rep.markdown)}</pre>
     </div>}
   </div>;
 }
@@ -578,34 +621,35 @@ function ProspectPanel({toast}) {
   useEffect(()=>{ load().catch(()=>{}); },[]);
   const run=async()=>{ try{ await api("/agents/prospecting/run",{method:"POST",
       body:JSON.stringify({niche,market,count:5,provider:"stub"})});
-      toast("5 candidats générés (démo)"); await load(); }catch(e){toast(e.message,true);} };
+      toast(T("5 candidats générés (démo)","5 candidates generated (demo)")); await load(); }catch(e){toast(e.message,true);} };
   const consent=async(id,basis)=>{ try{ await api(`/agents/prospecting/candidates/${id}/consent`,
       {method:"POST",body:JSON.stringify({consent_basis:basis})}); await load(); }
       catch(e){toast(e.message,true);} };
   const outreach=async(id,channel)=>{ try{
       const d=await api(`/agents/prospecting/candidates/${id}/outreach`,
         {method:"POST",body:JSON.stringify({channel,language:"fr"})});
-      setDraft(d.draft); toast("Brouillon prêt — signal de ciblage exclu"); await load(); }
+      setDraft(d.draft); toast(T("Brouillon prêt — signal de ciblage exclu","Draft ready — targeting signal excluded")); await load(); }
       catch(e){ setDraft(null); toast(e.message,true);} };
   const promote=async(id)=>{ try{ await api(`/agents/prospecting/candidates/${id}/promote`,{method:"POST"});
-      toast("Promu en lead — visible dans le Radar"); await load(); }catch(e){toast(e.message,true);} };
+      toast(T("Promu en lead — visible dans le Radar","Promoted to lead — visible in the Radar")); await load(); }catch(e){toast(e.message,true);} };
   return <div className="panel p-4">
     <div className="flex flex-wrap items-end gap-2 mb-3">
       <div className="flex-1 min-w-[180px]"><div className="mono text-[10px] text-[var(--mute)]">NICHE</div>
         <input value={niche} onChange={e=>setNiche(e.target.value)}
           className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm"/></div>
-      <div className="flex-1 min-w-[180px]"><div className="mono text-[10px] text-[var(--mute)]">MARCHÉ</div>
+      <div className="flex-1 min-w-[180px]"><div className="mono text-[10px] text-[var(--mute)]">{T("MARCHÉ","MARKET")}</div>
         <input value={market} onChange={e=>setMarket(e.target.value)}
           className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm"/></div>
-      <button onClick={run} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">Lancer la prospection</button>
+      <button onClick={run} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">{T("Lancer la prospection","Run prospecting")}</button>
     </div>
-    <div className="text-[10px] text-[var(--mute)] mb-3 mono">Fournisseur: stub (données démo) · Slot Explorium prêt · Pare-feu LCAP: le signal choisit QUI, jamais QUOI. Courriel bloqué sans base de consentement.</div>
+    <div className="text-[10px] text-[var(--mute)] mb-3 mono">{T("Fournisseur: stub (données démo) · Slot Explorium prêt · Pare-feu LCAP: le signal choisit QUI, jamais QUOI. Courriel bloqué sans base de consentement.",
+      "Provider: stub (demo data) · Explorium slot ready · CASL firewall: the signal picks WHO, never WHAT. Email blocked without a consent basis.")}</div>
     <div className="space-y-2">
       {rows.map(c=>(
         <div key={c.id} className="panel2 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{c.name}</span>
-            {c.is_demo && <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 border border-slate-500/40">DÉMO</span>}
+            {c.is_demo && <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 border border-slate-500/40">{T("DÉMO","DEMO")}</span>}
             <span className="mono text-[10px] text-[var(--mute)]">{c.email} · {c.phone}</span>
             <span className="ml-auto mono text-[10px] text-[var(--mute)]">{c.outreach_status}</span>
           </div>
@@ -613,15 +657,15 @@ function ProspectPanel({toast}) {
           <div className="flex flex-wrap items-center gap-2 mt-2">
             <select value={c.consent_basis||""} onChange={e=>consent(c.id,e.target.value)}
               className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]">
-              <option value="">— base LCAP/CASL —</option>
-              <option value="express">Consentement exprès</option>
-              <option value="implied_existing_business">Relation d'affaires</option>
-              <option value="implied_inquiry">Demande reçue</option>
-              <option value="conspicuous_publication_b2b">Publication B2B</option>
-              <option value="mail_only">Courrier seulement</option>
+              <option value="">{T("— base LCAP/CASL —","— CASL basis —")}</option>
+              <option value="express">{T("Consentement exprès","Express consent")}</option>
+              <option value="implied_existing_business">{T("Relation d'affaires","Business relationship")}</option>
+              <option value="implied_inquiry">{T("Demande reçue","Inquiry received")}</option>
+              <option value="conspicuous_publication_b2b">{T("Publication B2B","B2B publication")}</option>
+              <option value="mail_only">{T("Courrier seulement","Mail only")}</option>
             </select>
-            <button onClick={()=>outreach(c.id,"email")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">✉ Courriel</button>
-            <button onClick={()=>outreach(c.id,"letter")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">📮 Lettre</button>
+            <button onClick={()=>outreach(c.id,"email")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("✉ Courriel","✉ Email")}</button>
+            <button onClick={()=>outreach(c.id,"letter")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("📮 Lettre","📮 Letter")}</button>
             <button onClick={()=>outreach(c.id,"call")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">☎ Script</button>
             <button onClick={()=>promote(c.id)} className="mono text-[10px] px-2 py-1 rounded bg-[var(--amber)]/90 text-black font-semibold">→ Lead</button>
           </div>
@@ -638,16 +682,16 @@ function ContentPanel({toast}) {
   useEffect(()=>{ load().catch(()=>{}); },[]);
   const gen=async()=>{ try{ await api("/agents/content/generate",{method:"POST",
       body:JSON.stringify({topic,platforms:["instagram","facebook","linkedin"],language:"fr"})});
-      toast("3 brouillons générés"); await load(); }catch(e){toast(e.message,true);} };
+      toast(T("3 brouillons générés","3 drafts generated")); await load(); }catch(e){toast(e.message,true);} };
   const sched=async(id)=>{ const when=new Date(Date.now()+86400000).toISOString();
     try{ await api(`/agents/content/${id}/schedule`,{method:"POST",body:JSON.stringify({when})});
-      toast("Planifié demain"); await load(); }catch(e){toast(e.message,true);} };
+      toast(T("Planifié demain","Scheduled for tomorrow")); await load(); }catch(e){toast(e.message,true);} };
   return <div className="panel p-4">
     <div className="flex flex-wrap items-end gap-2 mb-3">
-      <div className="flex-1 min-w-[220px]"><div className="mono text-[10px] text-[var(--mute)]">SUJET</div>
+      <div className="flex-1 min-w-[220px]"><div className="mono text-[10px] text-[var(--mute)]">{T("SUJET","TOPIC")}</div>
         <input value={topic} onChange={e=>setTopic(e.target.value)}
           className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm"/></div>
-      <button onClick={gen} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">Générer IG + FB + LinkedIn</button>
+      <button onClick={gen} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">{T("Générer IG + FB + LinkedIn","Generate IG + FB + LinkedIn")}</button>
     </div>
     <div className="grid md:grid-cols-3 gap-3">
       {queue.map(i=>(
@@ -658,10 +702,10 @@ function ContentPanel({toast}) {
           </div>
           <pre className="mono text-[10px] whitespace-pre-wrap mt-2 flex-1 max-h-44 overflow-auto">{i.body}</pre>
           <div className="flex gap-2 mt-2">
-            <button onClick={()=>{navigator.clipboard.writeText(i.body); toast("Copié");}}
-              className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] flex-1">Copier</button>
+            <button onClick={()=>{navigator.clipboard.writeText(i.body); toast(T("Copié","Copied"));}}
+              className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] flex-1">{T("Copier","Copy")}</button>
             {i.status==="draft" && <button onClick={()=>sched(i.id)}
-              className="mono text-[10px] px-2 py-1 rounded bg-[var(--amber)]/90 text-black font-semibold flex-1">Planifier</button>}
+              className="mono text-[10px] px-2 py-1 rounded bg-[var(--amber)]/90 text-black font-semibold flex-1">{T("Planifier","Schedule")}</button>}
           </div>
         </div>))}
     </div>
@@ -753,6 +797,8 @@ function AnalyticsView({toast, on, feats}) {
     catch(e){ toast(e.message,true); } finally{ setBusy(false); } };
   if (!stats) return <div className="mono text-sm text-[var(--mute)] p-8">{T("chargement analytique…","loading analytics…")}</div>;
   const wmax = Math.max(...stats.weekly_new.map(w=>w.count), 1);
+  const funnelsT = stats.funnels.map(f=>({...f,
+    label: LANG==="fr" ? f.label : (FUNNEL_LABEL_EN[f.funnel]||f.label)}));
   return <div className="space-y-4 fadein">
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
       {[["CONTACTS",stats.totals.contacts],["LEADS",stats.totals.leads],
@@ -766,11 +812,11 @@ function AnalyticsView({toast, on, feats}) {
     <div className="grid lg:grid-cols-2 gap-4">
       <div className="panel p-4">
         <div className="mono text-[11px] amber mb-3">{T("▮ CONTACTS PAR ENTONNOIR","▮ CONTACTS BY FUNNEL")}</div>
-        <HBars data={stats.funnels} valueKey="total" labelKey="label"/>
+        <HBars data={funnelsT} valueKey="total" labelKey="label"/>
       </div>
       <div className="panel p-4">
         <div className="mono text-[11px] amber mb-3">{T("▮ CONVERSION VERS CLIENT CENTRIS","▮ CONVERSION TO CENTRIS CLIENT")}</div>
-        <HBars data={stats.funnels} valueKey="conversion_pct" labelKey="label" color="var(--ok)" fmt={(v)=>v+" %"}/>
+        <HBars data={funnelsT} valueKey="conversion_pct" labelKey="label" color="var(--ok)" fmt={(v)=>v+" %"}/>
       </div>
       <div className="panel p-4">
         <div className="mono text-[11px] amber mb-3">{T("▮ NOUVEAUX CONTACTS / SEMAINE (8 sem.)","▮ NEW CONTACTS / WEEK (8 wks)")}</div>
@@ -787,7 +833,7 @@ function AnalyticsView({toast, on, feats}) {
         <div className="mono text-[11px] amber mb-3">{T("▮ CLIENTS PAR ÉTAPE DU PIPELINE","▮ CLIENTS BY PIPELINE STAGE")}</div>
         {Object.keys(stats.stages).length===0
           ? <div className="text-xs text-[var(--mute)]">{T("Aucun client Centris pour l'instant.","No Centris clients yet.")}</div>
-          : <HBars data={Object.entries(stats.stages).map(([k,v])=>({label:k,n:v}))} valueKey="n" labelKey="label" color="#7dd3fc"/>}
+          : <HBars data={Object.entries(stats.stages).map(([k,v])=>({label:trStageLabel(k),n:v}))} valueKey="n" labelKey="label" color="#7dd3fc"/>}
       </div>
     </div>
     {on && on("cma_generator") && <CMAPanel toast={toast}/>}
