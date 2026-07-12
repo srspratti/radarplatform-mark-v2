@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="fr-CA">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radar Acheteur — Tableau de bord</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0E2933; --ink-2:#0B2028; --slate:#153A45; --slate-2:#17414D;
+    --line:#26525E; --mist:#E7EEEE; --mute:#9BB6BC; --faint:#6E9199;
+    --signal:#F2B441; --heat:#FF6A4D; --cool:#63B3A6;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{background:var(--ink); color:var(--mist); font-family:"Space Grotesk",system-ui,sans-serif; line-height:1.45; padding:28px 18px 60px}
+  .sheet{max-width:940px; margin:0 auto}
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500; letter-spacing:.28em; text-transform:uppercase; color:var(--signal)}
+
+  .mast{position:relative; overflow:hidden; border:1px solid var(--line); border-radius:14px; background:linear-gradient(150deg,var(--slate) 0%,var(--ink-2) 68%); padding:30px 30px 26px; margin-bottom:14px}
+  .radar{position:absolute; top:-70px; right:-70px; width:300px; height:300px; opacity:.5; pointer-events:none}
+  .radar .ring{fill:none; stroke:var(--line); stroke-width:1}
+  .sweep{transform-origin:150px 150px; animation:spin 7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .mast-top{display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; position:relative}
+  h1{font-size:clamp(28px,6vw,46px); font-weight:700; line-height:.98; letter-spacing:-.02em; margin:14px 0 0}
+  h1 .amp{color:var(--signal)}
+  .subline{color:var(--mute); font-size:14px; margin-top:12px; font-weight:400}
+  .subline b{color:var(--mist); font-weight:600}
+  .privacy{display:inline-flex; align-items:center; gap:8px; margin-top:18px; background:rgba(99,179,166,.10); border:1px solid rgba(99,179,166,.34); color:#B7E4DA; border-radius:999px; padding:7px 14px 7px 11px; font-size:12px; font-family:"IBM Plex Mono",monospace}
+  .live{display:inline-flex; align-items:center; gap:7px; font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--faint); letter-spacing:.1em}
+  .live .pip{width:7px; height:7px; border-radius:50%; background:var(--cool); box-shadow:0 0 0 0 rgba(99,179,166,.6); animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(99,179,166,.5)}70%{box-shadow:0 0 0 7px rgba(99,179,166,0)}100%{box-shadow:0 0 0 0 rgba(99,179,166,0)}}
+
+  .zone{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--faint); margin:22px 4px 10px; display:flex; align-items:center; gap:10px}
+  .zone::after{content:""; flex:1; height:1px; background:var(--line)}
+
+  .readouts{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px}
+  .readout{border:1px solid var(--line); border-radius:12px; background:var(--slate-2); padding:18px}
+  .readout .num{font-family:"IBM Plex Mono",monospace; font-size:30px; font-weight:600; color:#fff}
+  .readout .num .unit{font-size:15px; color:var(--faint); font-weight:500}
+  .readout .lab{font-size:12px; color:var(--mute); margin-top:6px; line-height:1.35}
+  .readout .delta{font-family:"IBM Plex Mono",monospace; font-size:12px; margin-top:8px}
+  .readout .tiers{display:flex; gap:14px; margin-top:10px; font-family:"IBM Plex Mono",monospace; font-size:12px}
+  .readout .tiers .h{color:var(--heat)} .readout .tiers .w{color:var(--signal)} .readout .tiers .c{color:var(--cool)}
+
+  .panel{border:1px solid var(--line); border-radius:14px; background:var(--slate-2); padding:22px 24px 24px; margin-bottom:14px}
+  .panel-h{display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:18px}
+  .panel-h h2{font-size:14px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--mist)}
+  .panel-h .note{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--faint)}
+
+  .bar-row{display:grid; grid-template-columns:150px 1fr 74px; align-items:center; gap:14px; padding:7px 0}
+  .bar-row .name{font-size:13.5px; color:var(--mist); font-weight:500}
+  .track{height:12px; background:rgba(255,255,255,.05); border-radius:7px; overflow:hidden}
+  .fill{height:100%; border-radius:7px; width:0; transition:width 1.1s cubic-bezier(.22,1,.36,1)}
+  .fill.hot{background:linear-gradient(90deg,#B8452F,var(--heat))}
+  .fill.warm{background:linear-gradient(90deg,#B98420,var(--signal))}
+  .fill.cool{background:linear-gradient(90deg,#2F6F66,var(--cool)); opacity:.85}
+  .chg{font-family:"IBM Plex Mono",monospace; font-size:13px; text-align:right; font-weight:500}
+  .chg.up{color:#8FD8CB} .chg.dn{color:#F2A08F} .chg.fl{color:var(--faint)}
+
+  .duo{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .bands{display:flex; flex-direction:column; gap:9px}
+  .band{display:grid; grid-template-columns:112px 1fr auto; align-items:center; gap:12px}
+  .band .pr{font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--mute)}
+  .heatbar{height:26px; border-radius:6px; display:flex; align-items:center; padding-left:10px; font-family:"IBM Plex Mono",monospace; font-size:11px; color:#0E2933; font-weight:600; min-width:44px}
+  .band .tr{font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--faint)}
+
+  .sig{display:flex; gap:12px; padding:11px 0; border-top:1px solid rgba(255,255,255,.06)}
+  .sig:first-child{border-top:0}
+  .dot{flex:none; width:9px; height:9px; border-radius:50%; margin-top:5px}
+  .dot.up{background:var(--heat)} .dot.dn{background:var(--cool)}
+  .sig .txt{font-size:13.5px; color:#CFDDDD}
+  .sig .txt b{color:#fff; font-weight:600}
+
+  /* network zone (locked until multi-broker) */
+  .locked{position:relative; border:1px dashed var(--line); border-radius:14px; background:repeating-linear-gradient(135deg,rgba(255,255,255,.012) 0 12px,transparent 12px 24px); padding:26px 24px; display:flex; gap:16px; align-items:flex-start; margin-bottom:14px}
+  .locked .ic{flex:none; width:34px; height:34px; border-radius:9px; background:rgba(242,180,65,.12); border:1px solid rgba(242,180,65,.35); display:flex; align-items:center; justify-content:center}
+  .locked h3{font-size:14px; font-weight:600; color:var(--mist); margin-bottom:4px}
+  .locked p{font-size:13px; color:var(--mute); line-height:1.5; max-width:640px}
+  .locked .tag{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--signal); border:1px solid rgba(242,180,65,.4); border-radius:999px; padding:3px 9px; margin-top:10px; display:inline-block}
+
+  .foot{display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:center; padding:8px 6px}
+  .foot .b{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--faint); max-width:560px; line-height:1.5}
+  .foot .m{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--signal); letter-spacing:.16em; text-transform:uppercase}
+
+  @media (max-width:680px){
+    .readouts{grid-template-columns:1fr} .duo{grid-template-columns:1fr}
+    .bar-row{grid-template-columns:100px 1fr 58px; gap:10px} .bar-row .name{font-size:12.5px}
+    .mast{padding:24px 20px} .panel{padding:20px 18px}
+  }
+  @media (prefers-reduced-motion:reduce){ .sweep,.live .pip{animation:none} .fill{transition:none} }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="mast">
+    <svg class="radar" viewBox="0 0 300 300" aria-hidden="true">
+      <circle class="ring" cx="150" cy="150" r="60"/><circle class="ring" cx="150" cy="150" r="100"/><circle class="ring" cx="150" cy="150" r="140"/>
+      <g class="sweep"><defs><linearGradient id="sw" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#F2B441" stop-opacity="0"/><stop offset="1" stop-color="#F2B441" stop-opacity=".5"/></linearGradient></defs>
+      <path d="M150 150 L150 10 A140 140 0 0 1 268 80 Z" fill="url(#sw)"/></g>
+    </svg>
+    <div class="mast-top">
+      <span class="eyebrow">Radar Acheteur ·· Tableau de bord</span>
+      <span class="live"><span class="pip"></span><span id="period">EN DIRECT</span></span>
+    </div>
+    <h1>Intelligence <span class="amp">de&nbsp;marché</span></h1>
+    <p class="subline">Calculé en direct depuis <b>votre pipeline</b> — la demande de vos acheteurs, secteur par secteur.</p>
+    <span class="privacy">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z" stroke="#63B3A6" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="#63B3A6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Vos acheteurs ne quittent jamais votre espace
+    </span>
+  </header>
+
+  <div class="zone">Votre activité</div>
+  <section class="readouts" id="readouts"></section>
+  <section class="panel">
+    <div class="panel-h"><h2>Demande par secteur</h2><span class="note">indice d'attention · Δ 30 j</span></div>
+    <div id="bars"></div>
+  </section>
+  <div class="duo">
+    <section class="panel">
+      <div class="panel-h"><h2>Chaleur · prix</h2></div>
+      <div class="bands" id="bands"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-h"><h2>Signaux du mois</h2><span class="note">calculé</span></div>
+      <div id="feed"></div>
+    </section>
+  </div>
+
+  <div class="zone">Réseau</div>
+  <div class="locked" id="network">
+    <div class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M7 11V8a5 5 0 0110 0v3" stroke="#F2B441" stroke-width="1.7" stroke-linecap="round"/><rect x="5" y="11" width="14" height="9" rx="2" stroke="#F2B441" stroke-width="1.7"/></svg></div>
+    <div>
+      <h3>Migration des acheteurs & référence réseau</h3>
+      <p>Ces couches s'appuient sur l'activité agrégée de plusieurs courtiers : flux migratoires entre secteurs et comparaison de votre taux de conversion avec le réseau. Elles s'activent dès que d'autres courtiers de votre territoire contribuent — vos données restant toujours privées.</p>
+      <span class="tag">S'active avec le réseau</span>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span class="b">Panneaux « Votre activité » calculés en direct depuis vos propres signaux. Aucune donnée d'acheteur individuelle n'est partagée. L'intelligence réseau est agrégée et anonymisée.</span>
+    <span class="m">Radar Acheteur</span>
+  </footer>
+</div>
+
+<script>
+// Fallback data mirrors the analytics output shape, so this file previews standalone
+// AND re-renders from the live API when deployed behind uvicorn.
+const DEMO = {
+  period:"Juin 2026",
+  readouts:{signals:4120, signals_delta:11, hot:7, warm:19, cool:34, active_buyers:212},
+  sectors:[
+    {name:"Villeray",index:100,delta:23,heat:"hot"},
+    {name:"Rosemont–P.-P.",index:92,delta:18,heat:"hot"},
+    {name:"Mercier–H.-M.",index:78,delta:15,heat:"hot"},
+    {name:"Saint-Léonard",index:66,delta:12,heat:"warm"},
+    {name:"Verdun",index:58,delta:9,heat:"warm"},
+    {name:"Ahuntsic",index:52,delta:6,heat:"warm"},
+    {name:"Le Plateau",index:47,delta:-7,heat:"cool"},
+    {name:"Le Sud-Ouest",index:38,delta:-11,heat:"cool"}
+  ],
+  price_bands:[
+    {label:"< 500 K",share:12,fill:52,trend:"up"},
+    {label:"500–700 K",share:22,fill:72,trend:"up"},
+    {label:"700–900 K",share:34,fill:100,trend:"up"},
+    {label:"900 K–1,2 M",share:19,fill:50,trend:"down"},
+    {label:"> 1,2 M",share:13,fill:30,trend:"down"}
+  ],
+  signals_feed:[
+    {dir:"up",text:"<b>Villeray</b> mène la demande ce mois-ci — +23 % d'attention en 30 jours."},
+    {dir:"dn",text:"<b>Le Plateau</b> refroidit (−7 %) — cycles plus longs à prévoir."},
+    {dir:"up",text:"La tranche <b>700–900 K</b> concentre 34 % de l'attention — le segment le plus profond."},
+    {dir:"up",text:"<b>7 prospects chauds</b> prêts à rappeler — marqués dans Follow Up Boss."}
+  ],
+  network_ready:false
+};
+
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const fr = n => (n==null?"—":n.toLocaleString('fr-CA'));
+const sign = d => d==null?"":(d>0?`+${d}\u00A0%`:`${d}\u00A0%`);
+const cls = d => d==null?"fl":(d>0?"up":(d<0?"dn":"fl"));
+const heatFill = t => ({hot:"linear-gradient(90deg,#B8452F,#FF6A4D)",warm:"linear-gradient(90deg,#C06A22,#F2B441)",cool:"linear-gradient(90deg,#2F6F66,#63B3A6)"}[t]||"");
+const trendGlyph = t => t==="up"?"↑":(t==="down"?"↓":"·");
+
+function render(d){
+  document.getElementById('period').textContent = (d.period||"EN DIRECT").toUpperCase();
+
+  document.getElementById('readouts').innerHTML = `
+    <div class="readout"><div class="num" data-c="${d.readouts.signals}">0</div>
+      <div class="lab">signaux d'acheteurs suivis (30 j)</div>
+      <div class="delta ${cls(d.readouts.signals_delta)}">${d.readouts.signals_delta==null?"—":"▲ "+sign(d.readouts.signals_delta)+" vs période préc."}</div></div>
+    <div class="readout"><div class="num" data-c="${d.readouts.active_buyers}">0</div>
+      <div class="lab">acheteurs actifs sur la période</div>
+      <div class="tiers"><span class="h">● ${d.readouts.hot} chaud</span><span class="w">● ${d.readouts.warm} tiède</span><span class="c">● ${d.readouts.cool} froid</span></div></div>
+    <div class="readout"><div class="num" data-c="${d.readouts.hot}">0</div>
+      <div class="lab">prospects chauds « À rappeler »</div>
+      <div class="delta up">▲ marqués dans Follow Up Boss</div></div>`;
+
+  document.getElementById('bars').innerHTML = d.sectors.map(s=>`
+    <div class="bar-row"><span class="name">${s.name}</span>
+      <div class="track"><div class="fill ${s.heat}" data-w="${s.index}"></div></div>
+      <span class="chg ${cls(s.delta)}">${sign(s.delta)}</span></div>`).join('') ||
+    `<p class="note" style="font-family:'IBM Plex Mono',monospace;color:var(--faint)">Pas encore assez de signaux géolocalisés — les secteurs apparaîtront à mesure que le pipeline tourne.</p>`;
+
+  document.getElementById('bands').innerHTML = d.price_bands.map(b=>`
+    <div class="band"><span class="pr">${b.label}</span>
+      <div class="heatbar" style="width:${Math.max(b.fill,16)}%;background:${heatFill(b.share>=Math.max(...d.price_bands.map(x=>x.share))?'hot':(b.trend==='down'?'cool':'warm'))}">${b.share}\u00A0%</div>
+      <span class="tr">${trendGlyph(b.trend)}</span></div>`).join('');
+
+  document.getElementById('feed').innerHTML = d.signals_feed.map(s=>`
+    <div class="sig"><span class="dot ${s.dir}"></span><span class="txt">${s.text}</span></div>`).join('');
+
+  document.getElementById('network').style.display = d.network_ready ? 'none' : '';
+
+  // animate
+  requestAnimationFrame(()=>{ document.querySelectorAll('.fill').forEach(f=>f.style.width=f.getAttribute('data-w')+'%'); });
+  document.querySelectorAll('.num[data-c]').forEach(el=>{
+    const t=+el.getAttribute('data-c');
+    if(reduce){el.textContent=fr(t);return;}
+    let s=null; const step=x=>{if(!s)s=x;const p=Math.min((x-s)/900,1);el.textContent=fr(Math.round(t*(1-Math.pow(1-p,3))));if(p<1)requestAnimationFrame(step);};
+    requestAnimationFrame(step);
+  });
+}
+
+// try live API (same origin), fall back to embedded demo
+fetch('/api/intelligence').then(r=>{if(!r.ok)throw 0;return r.json();})
+  .then(render).catch(()=>render(DEMO));
+</script>
+</body>
+</html>

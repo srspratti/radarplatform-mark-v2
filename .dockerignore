@@ -1,0 +1,7 @@
+internal/
+node_modules/
+**/__pycache__/
+*.db
+.pytest_cache/
+apps/*/src/
+docs/

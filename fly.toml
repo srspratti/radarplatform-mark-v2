@@ -1,0 +1,25 @@
+app = "radar-platform-marketable"
+primary_region = "yul"
+
+[build]
+
+[env]
+  RADAR_TENANT_ID = "danny"
+  RADAR_EDITION = "marketable"
+  RADAR_DB_URL = "sqlite:////data/radar_hub.db"
+  DB_PATH = "/data/radar_acheteur.db"
+
+[[mounts]]
+  source = "radar_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
