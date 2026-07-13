@@ -1,5 +1,5 @@
 """Event registry + ingest pipeline.
-7 families, 23 types. Ingest is idempotent (decision #2) and every ingest
+7 families, 28 types. Ingest is idempotent (decision #2) and every ingest
 re-projects stage + engagement (decisions #1, #4).
 """
 from __future__ import annotations
@@ -16,10 +16,12 @@ FAMILIES = {
     # browsing (Vitrine portal)
     "portal.session_started": "browsing", "listing.viewed": "browsing",
     "listing.favorited": "browsing", "listing.shared": "browsing",
-    "tour3d.viewed": "browsing",
+    "tour3d.viewed": "browsing", "listing.dwell": "browsing",
+    "calculator.used": "browsing", "section.viewed": "browsing",
+    "criteria.updated": "browsing",
     # communication
     "message.sent": "communication", "email.opened": "communication",
-    "call.logged": "communication",
+    "call.logged": "communication", "email.link_clicked": "communication",
     # visits
     "visit.requested": "visits", "visit.scheduled": "visits", "visit.completed": "visits",
     # offers
@@ -32,11 +34,15 @@ FAMILIES = {
 }
 
 # Engagement weights — ONLY consumed for actor == "client" (locked decision #1).
+# Enriched browsing signals stay ≤ tour3d.viewed (4): with the 100 cap and the
+# 7-day half-life a heavy browsing session adds points, not a stage jump.
 ENGAGEMENT_WEIGHTS = {
     "portal.session_started": 1, "email.opened": 1, "listing.viewed": 2,
     "tour3d.viewed": 4, "listing.shared": 5, "listing.favorited": 6,
     "message.sent": 8, "visit.requested": 12, "visit.scheduled": 10,
     "visit.completed": 15, "offer.submitted": 30, "offer.accepted": 40,
+    "listing.dwell": 3, "calculator.used": 4, "section.viewed": 1,
+    "criteria.updated": 3, "email.link_clicked": 3,
 }
 
 VALID_ACTORS = {"client", "realtor", "system"}

@@ -21,11 +21,13 @@ if sys.version_info < (3, 10):  # bare `uvicorn` often resolves to Anaconda base
         "  uvicorn radar_hub.main:app --reload\n"
         "ou simplement :  ./run_dev.sh\n")
 
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from .models import init_db
 from .api import router
@@ -309,6 +311,44 @@ function flip() { lang = lang === "fr" ? "en" : "fr";
 @app.get("/suivi/{token}", response_class=HTMLResponse, include_in_schema=False)
 def transaction_tracker(token: str):
     return HTMLResponse(_TRACKER_PAGE)
+
+
+@app.get("/l/{token}/{centris_no}", include_in_schema=False)
+def tracked_listing_link(token: str, centris_no: str):
+    """Tracked link used in the hub's own alert emails (alert_mailer):
+    click → email.link_clicked event → redirect into the client portal with
+    the listing deep-linked. Centris' own email links cannot be instrumented
+    (we don't control their HTML) — this mirror link is the capture point.
+    Demo/unknown tokens redirect without ingesting anything."""
+    no = re.sub(r"\D", "", centris_no)[:12]
+    dest = f"/portail/{token}" + (f"?listing={no}" if no else "")
+    if token == "demo" or not no:
+        return RedirectResponse(dest, status_code=302)
+    from .config import settings as _st
+    from .models import SessionLocal, Contact, Listing
+    db = SessionLocal()
+    try:
+        contact = (db.query(Contact)
+                   .filter_by(tenant_id=_st.DEFAULT_TENANT, portal_token=token)
+                   .first())
+        if not contact:
+            return RedirectResponse(dest, status_code=302)
+        row = (db.query(Listing)
+               .filter_by(tenant_id=contact.tenant_id, contact_id=contact.id,
+                          centris_no=no).first())
+        from .events import ingest_event
+        ingest_event(db, tenant_id=contact.tenant_id, contact_id=contact.id,
+                     etype="email.link_clicked", actor="client", origin="email",
+                     payload={"listing_id": no,
+                              "address": row.address if row else "",
+                              "via": "email"})
+        from .automations import check_engagement_threshold
+        check_engagement_threshold(db, contact.tenant_id, contact)
+    except Exception:  # noqa: BLE001 — tracking must never break the redirect
+        pass
+    finally:
+        db.close()
+    return RedirectResponse(dest, status_code=302)
 
 
 @app.get("/ops", response_class=HTMLResponse, include_in_schema=False)

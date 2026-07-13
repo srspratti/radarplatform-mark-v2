@@ -31,6 +31,18 @@ class Settings:
     TWILIO_TOKEN: str = os.getenv("TWILIO_TOKEN", "")
     TWILIO_FROM: str = os.getenv("TWILIO_FROM", "")
 
+    # Outbound SMTP (alert_mailer — the hub's own tracked-link alert emails).
+    # Unset = emails are marked "simulated". The intake Gmail works here too
+    # (SMTP_USER = INTAKE_EMAIL_USER + an app password).
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASS: str = os.getenv("SMTP_PASS", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "") or os.getenv("SMTP_USER", "")
+
+    # Public origin used to build tracked links (/l/<token>/<no>) in emails.
+    PUBLIC_BASE_URL: str = os.getenv("RADAR_PUBLIC_URL", "http://localhost:8000")
+
     # Per-client Matrix intake address ("design it on the fly")
     #   plus  -> INTAKE_EMAIL_USER+<tag>@gmail.com   (works with any Gmail/Workspace inbox)
     #   alias -> <slug>-<tag>@INTAKE_EMAIL_DOMAIN     (needs a catch-all domain)

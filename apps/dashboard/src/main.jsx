@@ -56,6 +56,12 @@ const EVENT_TXT = {
   "crm.synced": T("Synchronisé vers FUB", "Synced to FUB"),
   "lead.captured": T("Lead capté", "Lead captured"),
   "lead.contacted": T("Premier contact", "First contact"),
+  "listing.dwell": T("Lecture attentive de fiche", "Read a listing closely"),
+  "calculator.used": T("Calculatrice utilisée", "Used the calculator"),
+  "section.viewed": T("Section consultée", "Viewed a section"),
+  "criteria.updated": T("Critères mis à jour", "Updated search criteria"),
+  "email.link_clicked": T("Clic sur alerte courriel", "Clicked an email alert"),
+  "outreach.sent": T("Alerte courriel envoyée", "Alert email sent"),
 };
 
 const ago = (iso) => {

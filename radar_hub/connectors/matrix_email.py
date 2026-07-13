@@ -48,10 +48,27 @@ _RX_NAME = re.compile(
     r"(?:client|pour|for|contact)\s*:?\s+([A-ZÉÀÈ][\w'’-]+(?:\s+[A-ZÉÀÈ][\w'’-]+){1,2})")
 
 
+def _is_intake_address(addr: str) -> bool:
+    """True for the tenant's own intake addresses (INTAKE_EMAIL_USER itself,
+    its plus-tag variants, or anything on the alias catch-all domain). These
+    sit in the To/Cc headers of every routed email and must never be taken
+    for a contact's address."""
+    addr = addr.lower()
+    user = (settings.INTAKE_EMAIL_USER or "").lower()
+    if user:
+        local, _, domain = user.partition("@")
+        if addr == user or (addr.startswith(f"{local}+")
+                            and addr.endswith(f"@{domain or 'gmail.com'}")):
+            return True
+    domain = (settings.INTAKE_EMAIL_DOMAIN or "").lower()
+    return bool(domain) and addr.endswith(f"@{domain}")
+
+
 def parse_matrix_email(raw: str) -> ParsedMatrixEvent:
     body = raw[:6000]
     addr_m = _RX_ADDR.search(body)
-    email_m = _RX_EMAIL.search(body)
+    email_m = next((m for m in _RX_EMAIL.finditer(body)
+                    if not _is_intake_address(m.group(0))), None)
     name_m = _RX_NAME.search(body)
     base = ParsedMatrixEvent(
         kind="unknown",
@@ -81,7 +98,9 @@ def parse_matrix_email(raw: str) -> ParsedMatrixEvent:
                                        "listing_match"}:
             base.kind = out["kind"]
             base.name = base.name or out.get("name", "")
-            base.contact_email = base.contact_email or out.get("email", "").lower()
+            llm_email = out.get("email", "").lower()
+            if not _is_intake_address(llm_email):
+                base.contact_email = base.contact_email or llm_email
             base.address = base.address or out.get("address", "")
             base.confidence = float(out.get("confidence", 0.76))
             base.meta["parser"] = "haiku"
@@ -89,19 +108,24 @@ def parse_matrix_email(raw: str) -> ParsedMatrixEvent:
 
 
 def apply_parsed(db: Session, tenant_id: str, parsed: ParsedMatrixEvent,
-                 raw_id: str = "") -> dict:
-    """Route a parsed Matrix email into the event log."""
+                 raw_id: str = "", contact: Contact | None = None) -> dict:
+    """Route a parsed Matrix email into the event log. Pass ``contact`` when
+    the email is already routed (per-client intake address) — that signal
+    outranks the body-regex lookup below, which must then be skipped so it
+    can't create a duplicate contact."""
     if parsed.kind == "unknown" or parsed.confidence < 0.5:
         return {"applied": False, "reason": "low_confidence", "kind": parsed.kind}
 
-    contact = None
-    if parsed.contact_email:
-        contact = (db.query(Contact)
-                   .filter_by(tenant_id=tenant_id, email=parsed.contact_email)
-                   .first())
-    if not contact and parsed.name:
-        contact = (db.query(Contact)
-                   .filter_by(tenant_id=tenant_id, name=parsed.name).first())
+    if contact is None:
+        if parsed.contact_email:
+            contact = (db.query(Contact)
+                       .filter_by(tenant_id=tenant_id,
+                                  email=parsed.contact_email)
+                       .first())
+        if not contact and parsed.name:
+            contact = (db.query(Contact)
+                       .filter_by(tenant_id=tenant_id, name=parsed.name)
+                       .first())
 
     result = {"applied": True, "kind": parsed.kind, "created_contact": False,
               "converted": False}
@@ -154,6 +178,8 @@ def apply_parsed(db: Session, tenant_id: str, parsed: ParsedMatrixEvent,
     from ..scoring import refresh_priority
     if contact and contact.lifecycle == "lead":
         refresh_priority(db, contact)
+        from ..automations import check_priority_threshold
+        check_priority_threshold(db, tenant_id, contact)
     return result
 
 
@@ -263,6 +289,7 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
                    cards: list[dict], raw_id: str = "") -> dict:
     from ..models import Listing
     new = dup = 0
+    new_cards: list[dict] = []
     for card in cards:
         exists = (db.query(Listing)
                   .filter_by(tenant_id=tenant_id, contact_id=contact.id,
@@ -273,6 +300,7 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
         db.add(Listing(tenant_id=tenant_id, contact_id=contact.id, **card))
         db.commit()
         new += 1
+        new_cards.append(card)
         # Receiving a match is a system fact, not client engagement.
         ingest_event(db, tenant_id=tenant_id, contact_id=contact.id,
                      etype="email.opened", actor="system", origin="matrix",
@@ -280,7 +308,16 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
                               "address": card["address"], "match": True},
                      reproject=False,
                      idempotency_key=f"mx-listing-{contact.id}-{card['centris_no']}")
-    return {"listings_new": new, "listings_dup": dup}
+    alert_status = "skipped"
+    if new_cards:
+        # Mirror the alert as OUR tracked-link email — Centris' own email links
+        # can't be instrumented (we don't control their HTML); this is the
+        # click-capture mechanism (alert_mailer).
+        from ..automations import send_listing_alert_email
+        alert_status = send_listing_alert_email(db, tenant_id, contact,
+                                                new_cards, raw_id)
+    return {"listings_new": new, "listings_dup": dup,
+            "alert_email": alert_status}
 
 
 def process_raw_email(db: Session, tenant_id: str, raw: str,
@@ -309,12 +346,20 @@ def process_raw_email(db: Session, tenant_id: str, raw: str,
         out["applied"] = True
         out["contact_id"] = contact.id
     elif parsed.kind != "unknown":
-        out.update(apply_parsed(db, tenant_id, parsed, raw_id=raw_id))
-        # late-bind listings if apply_parsed just created/found the contact
-        if cards and not contact and out.get("contact_id"):
-            c2 = db.get(Contact, out["contact_id"])
-            if c2:
-                out.update(store_listings(db, tenant_id, c2, cards, raw_id))
+        if contact and cards and parsed.kind == "listing_match":
+            # store_listings already attributed each card to the routed
+            # contact — an aggregate mx-match event would double-log it.
+            out.update({"applied": True, "kind": parsed.kind,
+                        "created_contact": False, "converted": False,
+                        "contact_id": contact.id})
+        else:
+            out.update(apply_parsed(db, tenant_id, parsed, raw_id=raw_id,
+                                    contact=contact))
+            # late-bind listings if apply_parsed just created/found the contact
+            if cards and not contact and out.get("contact_id"):
+                c2 = db.get(Contact, out["contact_id"])
+                if c2:
+                    out.update(store_listings(db, tenant_id, c2, cards, raw_id))
     elif contact:
         out["applied"] = bool(cards)
         out["contact_id"] = contact.id

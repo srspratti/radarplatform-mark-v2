@@ -45,6 +45,8 @@ FEATURES: dict[str, tuple[str, str, str]] = {
                           "Page de suivi pour le client — moins d'appels « où en est-on? »."),
     "farming_reports":   ("gold", "Infolettre de quartier",
                           "« Vendu dans votre quartier » généré chaque mois."),
+    "alert_mailer":      ("gold", "Alertes courriel traquées",
+                          "Le hub renvoie l'alerte Centris avec des liens mesurés vers le portail."),
     # ---- platinum — le cabinet complet
     "cma_generator":     ("platinum", "Analyse comparative (ACM)",
                           "Collez vos comparables — rapport de prix suggéré bilingue."),
@@ -52,6 +54,8 @@ FEATURES: dict[str, tuple[str, str, str]] = {
                           "Messagerie d'affaires synchronisée à la chronologie (connecteur)."),
     "consent_vault":     ("platinum", "Registre de consentements",
                           "Piste d'audit Loi 25 / LCAP exportable, par contact."),
+    "ai_texts":          ("platinum", "Textos IA de seuil",
+                          "Texto automatique quand l'engagement ou la priorité franchit un seuil."),
 }
 
 _CONFIG_PATH = Path(__file__).resolve().parents[1] / "features.toml"

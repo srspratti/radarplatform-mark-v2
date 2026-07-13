@@ -1761,6 +1761,14 @@ function App() {
     const e = { id: `${DEMO_PROSPECT.id}-visit-${Date.now()}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: id, type: "visit", ts: Date.now(), meta: null };
     setEvents((prev) => { const next = [...prev, e]; store.set(K.events, next); return next; });
   }
+  // [radar-platform] patch (e): tracked alert-email clicks land on
+  // /portail/<token>?listing=<no> — the bridge stashes it, we open it once.
+  useEffect(() => {
+    if (!ready || typeof window === "undefined" || !window.__VITRINE_OPEN__) return;
+    const id = window.__VITRINE_OPEN__;
+    delete window.__VITRINE_OPEN__;
+    if (LISTINGS.some((l) => String(l.id) === String(id))) openListing(id);
+  }, [ready]);
   const setReaction = (r) => setReactions((prev) => { const next = { ...prev, [listingId]: r }; store.set(K.reactions, next); return next; });
   const setChat = (arr) => setChats((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.chats, next); return next; });
   const setDm = (arr) => setDms((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.dms, next); return next; });
@@ -1790,7 +1798,8 @@ function App() {
       <style>{FONT_CSS}</style>
 
       <header className="sticky top-0 z-40" style={{ background: "rgba(246,248,250,.86)", backdropFilter: "blur(10px)", borderBottom: `1px solid ${C.line}` }}>
-        <div className="max-w-2xl mx-auto px-3 sm:px-4">
+        {/* [radar-platform] patch (d): header widened to match patch (c) */}
+        <div className="max-w-6xl mx-auto px-3 sm:px-4">
           <div className="flex items-center justify-between py-2.5">
             <div className="flex items-center gap-2">
               <span style={{ width: 28, height: 28, borderRadius: 8, background: C.ink, color: "#fff", display: "grid", placeItems: "center", fontFamily: F.disp, fontWeight: 800, fontSize: 15 }}>V</span>
@@ -2192,7 +2201,9 @@ function ListingsView({ lang, onOpen }) {
   );
 
   return (
-    <div className="max-w-2xl mx-auto px-3 sm:px-4 pt-5 pb-16">
+    // [radar-platform] patch (c): listings fill the page — wide container +
+    // responsive card grid below (mobile stays single column)
+    <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-5 pb-16">
       <div className="flex items-end justify-between gap-3">
         <div>
           <Eyebrow>{t("Vos alertes", "Your alerts")} · {BROKER.name}</Eyebrow>
@@ -2209,7 +2220,7 @@ function ListingsView({ lang, onOpen }) {
       </div>
 
       {vm === "list" && (
-        <div className="space-y-3 mt-4">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 items-start">
           {rows.map((r) => (
             <div key={r.id} className="rounded-2xl overflow-hidden fade-up" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
               {r.video ? (

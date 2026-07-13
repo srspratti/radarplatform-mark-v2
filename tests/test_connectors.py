@@ -35,6 +35,17 @@ def test_parse_alert_email():
     assert p.confidence >= 0.75
 
 
+def test_parser_skips_tenant_intake_addresses():
+    # intake address in the headers must never win over the client's email
+    raw = "Delivered-To: alertes.radar+jeantremblay-abc123@gmail.com\n" + VISIT_EMAIL
+    assert parse_matrix_email(raw).contact_email == "jean.tremblay@example.com"
+    # when the intake address is the ONLY email, contact_email stays empty
+    only_intake = ("To: alertes.radar+x-abc123@gmail.com\n"
+                   "Subject: Matrix - Visite confirmée\n"
+                   "La visite est confirmée au 6244 rue Cartier, Montréal.")
+    assert parse_matrix_email(only_intake).contact_email == ""
+
+
 def test_visit_email_creates_lead_and_scores_engagement(db):
     p = parse_matrix_email(VISIT_EMAIL)
     res = apply_parsed(db, T, p, raw_id="msg-001")

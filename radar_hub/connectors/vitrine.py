@@ -22,6 +22,7 @@ from ..stages import STAGE_LABELS_FR
 PORTAL_EVENT_TYPES = {
     "portal.session_started", "listing.viewed", "listing.favorited",
     "listing.shared", "tour3d.viewed", "message.sent", "visit.requested",
+    "listing.dwell", "calculator.used", "section.viewed", "criteria.updated",
 }
 
 _EVENT_FR = {
@@ -30,6 +31,11 @@ _EVENT_FR = {
     "listing.favorited": "favori ajouté",
     "listing.shared": "fiche partagée",
     "tour3d.viewed": "visite 3D",
+    "listing.dwell": "lecture attentive de fiche",
+    "calculator.used": "calculatrice utilisée",
+    "section.viewed": "section consultée",
+    "criteria.updated": "critères mis à jour",
+    "email.link_clicked": "clic sur alerte courriel",
     "message.sent": "message envoyé",
     "visit.requested": "visite demandée",
     "visit.scheduled": "visite planifiée",
@@ -39,6 +45,7 @@ _EVENT_FR = {
     "client.converted": "ajouté à Centris",
     "lead.captured": "lead capté",
     "crm.synced": "sync CRM",
+    "outreach.sent": "alerte courriel envoyée",
 }
 
 
@@ -57,14 +64,17 @@ def handle_vitrine_payload(db: Session, tenant_id: str, payload: dict) -> dict:
     if not contact:
         return {"ok": False, "error": "portal_token inconnu"}
     ingested = deduped = 0
+    addr_cache: dict[str, str] = {}
     for ev in payload.get("events", []):
         etype = ev.get("type", "")
         if etype not in PORTAL_EVENT_TYPES or etype not in FAMILIES:
             continue
+        ev_payload = {k: v for k, v in ev.items() if k not in {"type", "event_id"}}
+        ev_payload = _with_address(db, tenant_id, contact.id, ev_payload, addr_cache)
         _, created = ingest_event(
             db, tenant_id=tenant_id, contact_id=contact.id, etype=etype,
             actor="client", origin="vitrine",
-            payload={k: v for k, v in ev.items() if k not in {"type", "event_id"}},
+            payload=ev_payload,
             idempotency_key=f"vit-{ev.get('event_id')}" if ev.get("event_id") else None,
             reproject=False)
         ingested += int(created)
@@ -73,8 +83,28 @@ def handle_vitrine_payload(db: Session, tenant_id: str, payload: dict) -> dict:
         from ..events import project_contact
         project_contact(db, tenant_id, contact.id)
         enqueue_activity_writeback(db, tenant_id, contact)
+        from ..automations import check_engagement_threshold
+        check_engagement_threshold(db, tenant_id, contact)
     return {"ok": True, "ingested": ingested, "deduped": deduped,
             "engagement_score": contact.engagement_score, "stage": contact.stage}
+
+
+def _with_address(db: Session, tenant_id: str, contact_id: int,
+                  payload: dict, cache: dict) -> dict:
+    """Resolve listing_id → address so Matrix digests read
+    « fiche consultée (4530 rue Rachel) » instead of a bare Centris number."""
+    lid = str(payload.get("listing_id") or "")
+    if not lid or payload.get("address"):
+        return payload
+    if lid not in cache:
+        from ..models import Listing
+        row = (db.query(Listing)
+               .filter_by(tenant_id=tenant_id, contact_id=contact_id,
+                          centris_no=lid).first())
+        cache[lid] = row.address if row and row.address else ""
+    if cache[lid]:
+        payload["address"] = cache[lid]
+    return payload
 
 
 def _summarize(contact: Contact, events: list[Event]) -> str:

@@ -26,3 +26,26 @@ auto_ack_en = "Hi {name}, I received your request — I'll get back to you short
 sequence_days = [1, 3, 7, 30]
 # Taux d'appréciation annuel utilisé par le rapport de valeur (client à vie)
 appreciation_rate = 0.028
+
+# --- Alertes courriel traquées (alert_mailer) --------------------------------
+# Quand une alerte Centris arrive à l'adresse d'admission du client, le hub
+# renvoie SA PROPRE version avec des liens mesurés vers le portail (/l/…).
+# Les liens des courriels Centris eux-mêmes ne peuvent PAS être instrumentés —
+# on ne contrôle pas leur HTML; ce courriel miroir est le mécanisme de capture.
+# {n} = nombre de nouvelles inscriptions
+alert_mail_subject_fr = "{n} nouvelles inscriptions dans votre portail"
+alert_mail_subject_en = "{n} new listings in your portal"
+
+# --- Textos IA de seuil (ai_texts) -------------------------------------------
+# Client Centris : quand le score d'engagement atteint le seuil, l'IA envoie
+# le texto prédéfini ({name} = prénom), au plus une fois par période de repos.
+engagement_text_threshold = 70
+engagement_text_cooldown_days = 7
+engagement_text_fr = "Bonjour {name}, je vois que de nouvelles propriétés vous intéressent — on planifie des visites? Danny"
+engagement_text_en = "Hi {name}, I see some listings caught your eye — want to book visits? Danny"
+# Lead : quand le score de priorité atteint le seuil, l'IA texte une seule fois
+# et une relance « rappeler » est créée pour le courtier (heures ci-dessous).
+priority_text_threshold = 75
+priority_callback_hours = 4
+priority_text_fr = "Bonjour {name}, merci pour votre demande — je vous appelle d'ici quelques heures. Danny"
+priority_text_en = "Hi {name}, thanks for reaching out — I'll call you within a few hours. Danny"

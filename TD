@@ -66,3 +66,17 @@ One important honest finding: the notary title-exam lane — which would otherwi
 
 If I were sequencing your next twelve months: Radar for realtors → same engine to mortgage brokers → plex-owner suite (analyzer + TAL copilot). Three revenue lines, one pipeline. Want me to spec the mortgage-broker variant, since it's the shortest path from code you already have?
 ------------------------------------------------------------------------------------------
+
+For the vitrine, i.e client engagement, I want the listings to fill the whole page? I would like to capture enhanced user interactions on the page to determine the engagement score. what are the options available. if there are external connectors to be used or external tools, I think this would be a good addition. Also, when a user clicks on any listing, I want that interaction to capture in matrix. When a user clicks the automated listings mail which centris normally sends it, the moment user clicks on the link, the event is captured or recorded in Matrix history. Now, if the engagement score is higher, how about AI sending a predefined text to the client? The score threshold can be configured by the realtor. Moreover, in the Radar, if the AI Priority score is higher than a threshold ( Realtor can configure this. ), the AI can send an automated text and then Realtor can call back later.  
+
+-------------------------------------------------
+
+In Vitrine, the page loads at the middle, instead of showing up the top, when the users clicks the microsite. 
+
+User should have a provision to write notes, 
+
+-------------------------------------------------------------------------------------------
+
+▮ CLIENTS CENTRIS — score d'engagement (activité Vitrine · Matrix · CRM) - Should we move it back to main Dashboard instead of here? The AI Priority score remains in Radar. 
+
+--------------------------------------------------------------------------------------------

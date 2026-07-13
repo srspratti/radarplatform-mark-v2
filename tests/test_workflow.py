@@ -87,6 +87,41 @@ def test_email_routed_by_intake_address_feeds_vitrine(client, db):
     assert all(x["url"].startswith("https://www.centris.ca") for x in rows)
 
 
+def test_routed_match_email_never_creates_spurious_contact(client, db):
+    """Regression: apply_parsed used to re-resolve the contact from the first
+    email regex-matched in the raw text — the intake address itself in the
+    To/Delivered-To headers — and create a 'Prospect Matrix' lead even though
+    the email was already routed by intake address."""
+    c = _mk_client(db)
+    raw = (ALERT_WITH_LISTINGS
+           .replace("To: mc.tremblay@example.com\n", "")   # intake addr = only email
+           # singular form so _RX_MATCH fires → kind == listing_match
+           .replace("nouvelles inscriptions correspondent",
+                    "nouvelle inscription correspond")
+           .replace("alertes.radar+mctremblay-abc123@gmail.com",
+                    c.intake_email))
+    r = client.post("/api/connectors/matrix/ingest-raw",
+                    json={"raw": raw, "message_id": "m-7"}).json()
+    assert r["routed_by_intake"] is True
+    assert r["parsed"]["kind"] == "listing_match"
+    assert r["parsed"]["email"] == ""            # intake address filtered out
+    assert r["created_contact"] is False
+    assert r["contact_id"] == c.id
+    assert r["listings_new"] == 2
+    assert db.query(Contact).count() == 1
+
+    # match email without listing cards: event attributed to routed contact
+    raw2 = (f"To: {c.intake_email}\n"
+            "Subject: Centris\n\n"
+            "Une nouvelle inscription correspond à vos critères.\n")
+    r2 = client.post("/api/connectors/matrix/ingest-raw",
+                     json={"raw": raw2, "message_id": "m-8"}).json()
+    assert r2["created_contact"] is False and r2["contact_id"] == c.id
+    assert db.query(Contact).count() == 1
+    assert db.query(Event).filter_by(contact_id=c.id,
+                                     type="email.opened").count() == 3
+
+
 def test_listings_endpoint_token_gated(client):
     assert client.get("/api/vitrine/listings/bogus").status_code == 401
 

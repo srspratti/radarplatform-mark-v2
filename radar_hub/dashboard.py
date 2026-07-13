@@ -316,6 +316,12 @@ function RadarView({toast, on, feats}) {
     {on && feats && !on("sequences") && <LockedCard k="sequences" feats={feats}/>}
     {on && on("open_house_qr") && <OpenHousePanel toast={toast}/>}
     {on && feats && !on("open_house_qr") && <LockedCard k="open_house_qr" feats={feats}/>}
+    {on && on("ai_texts") && feats && feats.settings && <div className="mono text-[10px] text-[var(--mute)]">
+      {T("🤖 Textos IA — seuils : engagement ≥ ","🤖 AI texts — thresholds: engagement ≥ ")}
+      {feats.settings.engagement_text_threshold ?? 70}
+      {" · "}{T("priorité ≥ ","priority ≥ ")}{feats.settings.priority_text_threshold ?? 75}
+      {" · "}{T("modifier dans features.toml [settings]","edit in features.toml [settings]")}
+    </div>}
   </div>;
 }
 
@@ -878,9 +884,11 @@ const FEATURE_EN = {
   review_engine:      ["Review engine", "Google review request at the right moment after closing."],
   transaction_tracker:["Client file tracker", "A live tracking page for clients — fewer “where are we?” calls."],
   farming_reports:    ["Neighbourhood newsletter", "“Sold in your area” drafted monthly."],
+  alert_mailer:       ["Tracked alert emails", "The hub re-sends the Centris alert with measured links to the portal."],
   cma_generator:      ["Comparative market analysis", "Paste your comps — suggested-price report in seconds."],
   messaging_sync:     ["Two-way SMS/WhatsApp", "Business messaging synced to the timeline (connector)."],
   consent_vault:      ["Consent registry", "Exportable Law 25 / CASL audit trail per contact."],
+  ai_texts:           ["Threshold AI texts", "Automatic text when engagement or priority crosses a threshold."],
 };
 const fLabel = (k,f) => T(f.label, (FEATURE_EN[k]||[])[0] || f.label);
 const fPitch = (k,f) => T(f.pitch, (FEATURE_EN[k]||[])[1] || f.pitch);
@@ -964,11 +972,14 @@ function NotifBell() {
     </button>
     {openB && <div className="absolute right-0 mt-1 w-72 panel p-2 z-50 fadein">
       {items.length===0 && <div className="text-[11px] text-[var(--mute)] p-2">{T("Aucune alerte non lue.","No unread alerts.")}</div>}
-      {items.map(n=>(
-        <div key={n.id} className="text-[11px] py-1.5 px-1 border-b border-[var(--line)]/40 last:border-0">
+      {items.map(n=>{
+        const smsIdx = (n.body||"").indexOf("\nsms:");
+        return <div key={n.id} className="text-[11px] py-1.5 px-1 border-b border-[var(--line)]/40 last:border-0">
           <div className="font-semibold">{n.title}</div>
-          <div className="text-[var(--mute)]">{n.body}</div>
-        </div>))}
+          <div className="text-[var(--mute)] whitespace-pre-wrap">{smsIdx<0 ? n.body : n.body.slice(0,smsIdx)}</div>
+          {smsIdx>=0 && <a href={n.body.slice(smsIdx+1)} className="amber underline">
+            📲 {T("Envoyer moi-même","Send myself")}</a>}
+        </div>;})}
       {items.length>0 && <button onClick={markRead}
         className="mono text-[10px] mt-1 w-full py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("Tout marquer lu","Mark all read")}</button>}
     </div>}

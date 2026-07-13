@@ -143,6 +143,8 @@ def create_lead(body: LeadIn, db: Session = Depends(get_db),
     if c.priority_score >= 60:
         _notify(db, t, "hot_lead", f"🔥 Lead chaud : {c.name}",
                 c.priority_hint or "", c.id)
+    from .automations import check_priority_threshold
+    check_priority_threshold(db, t, c)
     return _contact_out(c)
 
 
@@ -603,24 +605,18 @@ def _require(key: str) -> None:
                                  f"forfait — ajuster tier/overrides dans features.toml")
 
 
+# Bodies live in automations.py (shared with the connectors — no import cycle);
+# these delegates keep every existing call site unchanged.
 def _notify(db: Session, t: str, kind: str, title: str, body: str = "",
             contact_id: int | None = None) -> None:
-    if features.enabled("notifications"):
-        db.add(NotificationItem(tenant_id=t, kind=kind, title=title,
-                                body=body, contact_id=contact_id))
-        db.commit()
+    from .automations import notify
+    notify(db, t, kind, title, body, contact_id)
 
 
 def _queue_msg(db: Session, t: str, c: Contact, channel: str, body: str,
                purpose: str) -> OutboundMessage:
-    m = OutboundMessage(tenant_id=t, contact_id=c.id, channel=channel,
-                        to_addr=c.phone if channel in ("sms", "whatsapp")
-                                else c.email,
-                        body=body, purpose=purpose,
-                        status="pending" if settings.TWILIO_SID else "simulated")
-    db.add(m)
-    db.commit()
-    return m
+    from .automations import queue_msg
+    return queue_msg(db, t, c, channel, body, purpose)
 
 
 # --- notifications (premium) ------------------------------------------------
@@ -767,6 +763,8 @@ def openhouse_signin(ref: str, body: OpenHouseIn,
     refresh_priority(db, c, use_llm=False)
     _notify(db, t, "hot_lead", f"Porte ouverte : {c.name}",
             f"Nouveau visiteur inscrit — {ref}", c.id)
+    from .automations import check_priority_threshold
+    check_priority_threshold(db, t, c)
     return {"ok": True, "merci": True}
 
 
@@ -1052,6 +1050,14 @@ def messaging_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
             "queued": q.filter_by(status="pending").count(),
             "simulated": q.filter_by(status="simulated").count(),
             "sent": q.filter_by(status="sent").count()}
+
+
+@router.post("/messaging/flush", dependencies=[Depends(auth)])
+def messaging_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Re-drive still-pending outbound messages (e.g. after adding Twilio creds)."""
+    _require("messaging_sync")
+    from .connectors import sms
+    return sms.flush_pending(db, t)
 
 
 class MsgIn(BaseModel):
