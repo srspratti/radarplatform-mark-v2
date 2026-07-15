@@ -61,6 +61,10 @@ def dispatch(db: Session, msg: OutboundMessage) -> OutboundMessage:
     elif msg.channel == "email":
         from ..mailer import send_email
         status = send_email(msg.to_addr, msg.purpose or "Radar Hub", msg.body)
+    elif msg.channel == "voice":
+        from ..agents import voice
+        status, _detail = voice.place_voice_call(
+            msg.to_addr, voice.build_twiml(msg.id, msg.body))
     else:
         status = "failed"
     msg.status = status

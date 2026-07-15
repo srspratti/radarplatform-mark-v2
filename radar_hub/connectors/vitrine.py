@@ -23,6 +23,7 @@ PORTAL_EVENT_TYPES = {
     "portal.session_started", "listing.viewed", "listing.favorited",
     "listing.shared", "tour3d.viewed", "message.sent", "visit.requested",
     "listing.dwell", "calculator.used", "section.viewed", "criteria.updated",
+    "note.added",
 }
 
 _EVENT_FR = {
@@ -35,6 +36,7 @@ _EVENT_FR = {
     "calculator.used": "calculatrice utilisée",
     "section.viewed": "section consultée",
     "criteria.updated": "critères mis à jour",
+    "note.added": "note personnelle rédigée",
     "email.link_clicked": "clic sur alerte courriel",
     "message.sent": "message envoyé",
     "visit.requested": "visite demandée",

@@ -49,3 +49,25 @@ priority_text_threshold = 75
 priority_callback_hours = 4
 priority_text_fr = "Bonjour {name}, merci pour votre demande — je vous appelle d'ici quelques heures. Danny"
 priority_text_en = "Hi {name}, thanks for reaching out — I'll call you within a few hours. Danny"
+
+# --- Agents vocaux IA (ai_voice_outreach · ai_client_checkin · ai_receptionist)
+# Prénom du courtier injecté dans tous les scripts ({broker}).
+broker_name = "Danny"
+# Lead prioritaire : seuil de priorité IA, canal (voice = appel voix clonée /
+# sms), et délai de rappel humain promis dans le script.
+voice_priority_threshold = 75
+voice_outreach_channel = "voice"
+voice_callback_hours = 2
+# Relance client Centris : seuil d'engagement « chaud », canal, et période de
+# repos entre deux relances IA (les clients inactifs — dormant — sont aussi
+# relancés, avec le message « rafraîchir la recherche »).
+voice_checkin_hot_threshold = 70
+voice_checkin_channel = "sms"
+voice_checkin_cooldown_days = 14
+# Réceptionniste vocale — les messages d'accueil (appel manqué) sont bilingues,
+# français québécois d'abord (Loi 96). Personnalisables ici :
+# receptionist_greeting_fr / receptionist_greeting_en
+# receptionist_sms_fr / receptionist_sms_en
+# Scripts d'appel personnalisables : voice_lead_script_fr/en,
+# voice_checkin_hot_fr/en, voice_checkin_dormant_fr/en, qualification_sms_fr/en.
+# Voix clonée : définir ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID au déploiement.

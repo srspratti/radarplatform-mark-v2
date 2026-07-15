@@ -26,10 +26,16 @@ class Settings:
     VITRINE_WEBHOOK_SECRET: str = os.getenv("VITRINE_WEBHOOK_SECRET", "")
 
     # SMS/WhatsApp provider (messaging_sync connector — platinum). Unset = the
-    # outbound queue marks messages "simulated" instead of sending.
+    # outbound queue marks messages "simulated" instead of sending. The same
+    # Twilio account places the AI voice agent's outbound calls.
     TWILIO_SID: str = os.getenv("TWILIO_SID", "")
     TWILIO_TOKEN: str = os.getenv("TWILIO_TOKEN", "")
     TWILIO_FROM: str = os.getenv("TWILIO_FROM", "")
+
+    # Cloned-voice TTS for the AI voice agents (ElevenLabs). VOICE_ID is the
+    # broker's own cloned voice; unset = Twilio <Say> fr-CA/en-CA fallback.
+    ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_VOICE_ID: str = os.getenv("ELEVENLABS_VOICE_ID", "")
 
     # Outbound SMTP (alert_mailer — the hub's own tracked-link alert emails).
     # Unset = emails are marked "simulated". The intake Gmail works here too

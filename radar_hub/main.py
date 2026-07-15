@@ -228,6 +228,106 @@ def open_house_form(ref: str):
     return HTMLResponse(_OPEN_HOUSE_PAGE.replace("__REF__", safe or "visite"))
 
 
+_QUALIFICATION_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Préparer votre rappel</title></head>
+<body style="margin:0;background:#F6F8FA;font-family:system-ui;color:#111B2E;
+display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box">
+<form id="f" style="max-width:440px;width:100%;padding:28px;background:#fff;
+border:1px solid #DCE2EA;border-radius:16px;position:relative">
+<button type="button" id="lang" style="position:absolute;top:14px;right:14px;
+border:1px solid #DCE2EA;background:#fff;border-radius:99px;padding:5px 10px;
+font-size:12px;font-weight:700;color:#111B2E;cursor:pointer">🌐 FR</button>
+<div id="t_hi" style="font-weight:800;font-size:22px"></div>
+<p id="t_intro" style="color:#5A6577;font-size:14px;line-height:1.5"></p>
+<label id="l_budget" style="font-size:12px;color:#5A6577"></label>
+<input id="budget" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin:2px 0 10px"/>
+<label id="l_tl" style="font-size:12px;color:#5A6577"></label>
+<select id="tl" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin:2px 0 10px;
+background:#fff"></select>
+<label id="l_areas" style="font-size:12px;color:#5A6577"></label>
+<input id="areas" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;margin:2px 0 10px"/>
+<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;
+color:#111B2E;margin-bottom:10px">
+<input id="pq" type="checkbox" style="margin-top:2px"/><span id="t_pq"></span></label>
+<textarea id="msg" rows="3" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;resize:vertical"></textarea>
+<button id="t_btn" style="margin-top:12px;width:100%;padding:12px;border:0;
+border-radius:10px;background:#1656B4;color:#fff;font-weight:700;font-size:14px"></button>
+<div id="ok" style="display:none;text-align:center;padding:12px 0 0;color:#2F7D5C;
+font-weight:700"></div>
+<p id="t_legal" style="color:#5A6577;font-size:11px;line-height:1.4;margin:12px 0 0"></p>
+</form>
+<script>
+const I18N = {
+  fr: { hi:"Préparons votre rappel 📞",
+        intro:"30 secondes — vos réponses aident votre courtier à préparer un rappel utile.",
+        budget:"Budget approximatif", tlLabel:"Horizon d'achat",
+        tl:["Dès que possible","0–3 mois","3–6 mois","6–12 mois","J'explore"],
+        areas:"Secteurs recherchés (ex: Rosemont, Longueuil)",
+        pq:"Je suis préapprouvé·e pour un prêt hypothécaire",
+        msg:"Autre chose à mentionner ? (optionnel)",
+        btn:"Envoyer", ok:"Merci ! Votre courtier vous rappelle bientôt. ✅",
+        legal:"Vos réponses servent uniquement à préparer votre rappel (Loi 25 — minimisation des données).",
+        flag:"🌐 FR" },
+  en: { hi:"Let's prep your callback 📞",
+        intro:"30 seconds — your answers help your realtor make the callback count.",
+        budget:"Approximate budget", tlLabel:"Buying timeline",
+        tl:["As soon as possible","0–3 months","3–6 months","6–12 months","Just exploring"],
+        areas:"Areas of interest (e.g. Rosemont, Longueuil)",
+        pq:"I'm pre-approved for a mortgage",
+        msg:"Anything else to mention? (optional)",
+        btn:"Send", ok:"Thank you! Your realtor will call you back shortly. ✅",
+        legal:"Your answers are used only to prepare your callback (Law 25 — data minimization).",
+        flag:"🌐 EN" },
+};
+let lang = localStorage.getItem("radar_lang") || "fr";
+function apply() {
+  const d = I18N[lang];
+  document.documentElement.lang = lang;
+  t_hi.textContent = d.hi; t_intro.textContent = d.intro;
+  l_budget.textContent = d.budget; l_tl.textContent = d.tlLabel;
+  l_areas.textContent = d.areas; t_pq.textContent = d.pq;
+  msg.placeholder = d.msg; t_btn.textContent = d.btn; ok.textContent = d.ok;
+  t_legal.textContent = d.legal;
+  document.getElementById("lang").textContent = d.flag;
+  const cur = tl.selectedIndex;
+  tl.innerHTML = d.tl.map(o => `<option>${o}</option>`).join("");
+  tl.selectedIndex = cur >= 0 ? cur : 0;
+}
+document.getElementById("lang").onclick = () => {
+  lang = lang === "fr" ? "en" : "fr";
+  localStorage.setItem("radar_lang", lang); apply();
+};
+apply();
+document.getElementById("f").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const b = { budget: budget.value.trim(), timeline: tl.value,
+              prequalified: pq.checked, areas: areas.value.trim(),
+              message: msg.value.trim() };
+  const r = await fetch("/api/forms/qualification/__QID__", { method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(b) });
+  if (r.ok) { ok.style.display = "block";
+              ev.target.querySelector("#t_btn").disabled = true; }
+};
+</script></body></html>"""
+
+
+@app.get("/q/{qid}", response_class=HTMLResponse, include_in_schema=False)
+def qualification_form(qid: str):
+    """Qualification form the AI outreach agent texts to hot leads. The token
+    is self-validating (contact id + HMAC-ish signature) — invalid links get
+    a 404 instead of a form that would silently go nowhere."""
+    from .agents.voice import parse_qual_token
+    safe = "".join(ch for ch in qid if ch.isalnum() or ch == "-")[:24]
+    if parse_qual_token(safe) is None:
+        return HTMLResponse("<h1>Formulaire introuvable</h1>", status_code=404)
+    return HTMLResponse(_QUALIFICATION_PAGE.replace("__QID__", safe))
+
+
 _TRACKER_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Suivi de votre dossier</title></head>

@@ -171,7 +171,7 @@ function Stepper({order, labels, current}) {
 
 // -------------------------------------------- follow-ups + open house ------
 const FU_ICON = {sequence:"⏰", anniversary:"🎂", tax_season:"🧾",
-                 equity_report:"📈", review_ask:"⭐"};
+                 equity_report:"📈", review_ask:"⭐", callback:"📞"};
 
 function FollowupsPanel({toast}) {
   const [due,setDue]=useState([]);
@@ -297,20 +297,18 @@ function RadarView({toast, on, feats}) {
           </div>))}
       </div>
     </div>
-    {sum.top_clients && sum.top_clients.length>0 && <div className="panel p-4">
-      <div className="mono text-[11px] amber mb-2">{T("▮ CLIENTS CENTRIS — score d'engagement (activité Vitrine · Matrix · CRM)","▮ CENTRIS CLIENTS — engagement score (Vitrine · Matrix · CRM activity)")}</div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {sum.top_clients.map(c=>(
-          <div key={c.id} className="panel2 p-3 flex flex-col items-center text-center gap-1">
-            <Ring score={c.engagement_score}/>
-            <div className="text-xs font-medium truncate w-full">{c.name}{c.dormant?" 😴":""}</div>
-            <div className="mono text-[9px] text-[var(--mute)]">{trStage(c.stage, c.stage_label)}</div>
-          </div>))}
+    {/* Engagement suivi des clients Centris : déplacé vers le tableau de bord
+        principal (/) — le Radar garde le score de priorité IA des leads. */}
+    {sum.top_clients && sum.top_clients.length>0 && <div className="panel p-4 flex flex-col md:flex-row md:items-center gap-3">
+      <div className="flex-1">
+        <div className="mono text-[11px] amber mb-1">{T("▮ CLIENTS CENTRIS — score d'engagement → tableau de bord principal","▮ CENTRIS CLIENTS — engagement score → main dashboard")}</div>
+        <div className="mono text-[10px] text-[var(--mute)]">
+          {T("Un seul cerveau, deux scores : la priorité IA (quel lead appeler maintenant) reste ici dans le Radar; l'engagement des clients Centris (activité Vitrine · Matrix · CRM) vit sur le tableau de bord principal.",
+             "One brain, two scores: AI priority (which lead to call now) stays here in the Radar; Centris-client engagement (Vitrine · Matrix · CRM activity) lives on the main dashboard.")}
+        </div>
       </div>
-      <div className="mono text-[10px] text-[var(--mute)] mt-3">
-        {T("Un seul cerveau, deux scores : priorité (quel lead appeler maintenant) et engagement (quel client Centris est chaud ou décroche). Fiches complètes dans 👥 Contacts · suivi et conversations dans 📊 Engagement ↗.",
-           "One brain, two scores: priority (which lead to call now) and engagement (which Centris client is hot or drifting). Full profiles in 👥 Contacts · follow-up and conversations in 📊 Engagement ↗.")}
-      </div>
+      <a href="/" className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold hover:bg-[var(--amber)] shrink-0">
+        {T("📊 Ouvrir le tableau d'engagement ↗","📊 Open the engagement dashboard ↗")}</a>
     </div>}
     {on && (on("sequences")||on("client_for_life")||on("review_engine")) && <FollowupsPanel toast={toast}/>}
     {on && feats && !on("sequences") && <LockedCard k="sequences" feats={feats}/>}
@@ -571,13 +569,87 @@ function AgentsView({toast}) {
   const [tab,setTab]=useState("office");
   return <div className="fadein">
     <div className="flex gap-2 mb-4">
-      {[["office",T("🗂 Gestion de bureau","🗂 Office management")],["prospect",T("🎯 Prospection","🎯 Prospecting")],["content",T("📣 Contenu & social","📣 Content & social")]].map(([k,l])=>(
+      {[["office",T("🗂 Gestion de bureau","🗂 Office management")],["prospect",T("🎯 Prospection","🎯 Prospecting")],["content",T("📣 Contenu & social","📣 Content & social")],["voice",T("📞 Voix & relances","📞 Voice & follow-ups")]].map(([k,l])=>(
         <button key={k} onClick={()=>setTab(k)}
           className={"mono text-[11px] px-3 py-1.5 rounded border "+(tab===k?"border-[var(--amber)] amber":"border-[var(--line)] text-[var(--mute)]")}>{l}</button>))}
     </div>
     {tab==="office" && <OfficePanel toast={toast}/>}
     {tab==="prospect" && <ProspectPanel toast={toast}/>}
     {tab==="content" && <ContentPanel toast={toast}/>}
+    {tab==="voice" && <VoicePanel toast={toast}/>}
+  </div>;
+}
+
+function VoicePanel({toast}) {
+  const [cfg,setCfg]=useState(null); const [queue,setQueue]=useState([]);
+  const [phone,setPhone]=useState(""); const [busy,setBusy]=useState(false);
+  const load=async()=>{ setCfg(await api("/agents/voice/receptionist"));
+                        setQueue(await api("/agents/voice/queue")); };
+  useEffect(()=>{ load().catch(e=>toast(e.message,true)); },[]);
+  const sweep=async(path,label)=>{ if(busy) return; setBusy(true);
+    try{ const r=await api(path,{method:"POST"});
+      toast(`${label}: ${r.sent} ${T("contacté(s)","contacted")} · ${r.skipped} ${T("passé(s)","skipped")}`);
+      await load(); }catch(e){ toast(e.message,true);} finally{ setBusy(false);} };
+  const simulate=async()=>{ if(!phone.trim()) return;
+    try{ const r=await api("/webhooks/voice-inbound",{method:"POST",
+      body:JSON.stringify({from:phone.trim()})});
+      toast(r.handled?T("Appel manqué traité — texto + rappel créés","Missed call handled — text + callback created")
+                     :(r.reason||T("Non traité","Not handled")), !r.handled);
+      setPhone(""); await load(); }catch(e){ toast(e.message,true);} };
+  const PURPOSE={voice_priority:T("Lead prioritaire","Priority lead"),
+    voice_checkin:T("Relance client","Client check-in"),
+    missed_call_ack:T("Appel manqué","Missed call"),
+    qualification_form:T("Formulaire","Form")};
+  return <div className="space-y-4">
+    <div className="panel p-4">
+      <div className="mono text-[11px] amber mb-2">{T("▮ RÉCEPTIONNISTE VOCALE IA — appels manqués, FR québécois + EN","▮ AI VOICE RECEPTIONIST — missed calls, Québécois FR + EN")}</div>
+      {cfg && <>
+        <div className="mono text-[10px] text-[var(--mute)] mb-2">
+          {T("Fournisseur : ","Provider: ")}{cfg.provider.note} · webhook <span className="amber">{cfg.webhook}</span>
+        </div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="panel2 p-3"><div className="mono text-[10px] amber mb-1">🇫🇷 {T("Accueil français","French greeting")}</div>
+            <div className="text-[12px] leading-relaxed">{cfg.greetings.fr}</div></div>
+          <div className="panel2 p-3"><div className="mono text-[10px] amber mb-1">🇬🇧 {T("Accueil anglais","English greeting")}</div>
+            <div className="text-[12px] leading-relaxed">{cfg.greetings.en}</div></div>
+        </div>
+        <div className="flex gap-2 items-center mt-3 flex-wrap">
+          <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder={T("Simuler un appel manqué — nº (ex: 514 555 0148)","Simulate a missed call — # (e.g. 514 555 0148)")}
+            className="bg-black/30 border border-[var(--line)] rounded px-3 py-1.5 text-sm outline-none focus:border-[var(--amber)] min-w-[260px]"/>
+          <button onClick={simulate} className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">☎️ {T("Simuler","Simulate")}</button>
+          <span className="mono text-[10px] text-[var(--mute)]">{T("→ lead créé si inconnu · texto d'excuse · rappel planifié","→ lead created if unknown · apology text · callback scheduled")}</span>
+        </div>
+      </>}
+    </div>
+    <div className="panel p-4">
+      <div className="mono text-[11px] amber mb-2">{T("▮ AGENT D'APPELS IA — leads prioritaires & relances clients","▮ AI CALLING AGENT — priority leads & client check-ins")}</div>
+      <div className="mono text-[10px] text-[var(--mute)] mb-3">
+        {T("Lead : priorité ≥ seuil → appel (voix clonée) ou texto + formulaire de qualification + tâche de rappel. Client Centris : engagement ≥ seuil (chaud) ou inactif → relance. Seuils dans features.toml [settings]. Garde-fous : consentement LCAP requis, une seule touche par lead, période de repos par client.",
+           "Lead: priority ≥ threshold → call (cloned voice) or text + qualification form + callback task. Centris client: engagement ≥ threshold (hot) or dormant → check-in. Thresholds in features.toml [settings]. Guardrails: CASL consent required, one touch per lead, per-client cooldown.")}
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={()=>sweep("/agents/voice/outreach/run",T("Leads prioritaires","Priority leads"))} disabled={busy}
+          className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold hover:bg-[var(--amber)]">{T("📞 Contacter les leads prioritaires","📞 Contact priority leads")}</button>
+        <button onClick={()=>sweep("/agents/voice/checkins/run",T("Relances clients","Client check-ins"))} disabled={busy}
+          className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold hover:bg-[var(--amber)]">{T("🔁 Relancer les clients (engagement)","🔁 Check in on clients (engagement)")}</button>
+      </div>
+      {queue.length>0 && <div className="mt-3 space-y-1.5">
+        <div className="mono text-[10px] text-[var(--mute)]">{T("File des touches IA (50 dernières) :","AI touch queue (last 50):")}</div>
+        {queue.map(m=>(
+          <div key={m.id} className="panel2 p-2.5 flex items-start gap-2">
+            <span className="mono text-[10px] shrink-0">{m.channel==="voice"?"📞":"💬"}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[12px] font-medium">{m.contact}</span>
+                <span className="mono text-[9px] px-1.5 py-0.5 rounded border border-[var(--line)] text-[var(--mute)]">{PURPOSE[m.purpose]||m.purpose}</span>
+                <span className={"mono text-[9px] px-1.5 py-0.5 rounded "+(m.status==="sent"?"bg-emerald-400/15 text-emerald-300":m.status==="failed"?"bg-red-400/15 text-red-300":"bg-slate-400/15 text-slate-300")}>{m.status}</span>
+                <span className="mono text-[9px] text-[var(--mute)] ml-auto">{m.created_at.slice(0,16).replace("T"," ")}</span>
+              </div>
+              <div className="mono text-[10px] text-[var(--mute)] mt-0.5 whitespace-pre-wrap">{m.body.length>180?m.body.slice(0,180)+"…":m.body}</div>
+            </div>
+          </div>))}
+      </div>}
+    </div>
   </div>;
 }
 

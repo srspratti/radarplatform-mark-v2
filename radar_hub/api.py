@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from .connectors import vitrine as vit
 from .agents import office_manager as office
 from .agents import prospecting as prospect
 from .agents import content_social as content
+from .agents import voice as voice_agent
 
 router = APIRouter(prefix="/api")
 
@@ -442,6 +444,132 @@ def content_schedule(item_id: int, body: ScheduleIn,
         raise HTTPException(404, str(e))
     return {"id": i.id, "status": i.status,
             "scheduled_at": i.scheduled_at.isoformat()}
+
+
+# ------------------------------------------------------- AI voice agents --
+class VoiceOutreachIn(BaseModel):
+    channel: str = "auto"  # auto | voice | sms
+
+
+@router.post("/agents/voice/outreach/run", dependencies=[Depends(auth)])
+def voice_outreach_sweep(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    if not features.enabled("ai_voice_outreach"):
+        raise HTTPException(422, "fonction ai_voice_outreach désactivée "
+                                 "(forfait platinum ou [overrides])")
+    return voice_agent.run_outreach_sweep(db, t)
+
+
+@router.post("/agents/voice/outreach/{cid}", dependencies=[Depends(auth)])
+def voice_outreach_one(cid: int, body: VoiceOutreachIn = VoiceOutreachIn(),
+                       db: Session = Depends(get_db), t: str = Depends(tenant)):
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return voice_agent.run_lead_outreach(db, t, c, channel=body.channel)
+
+
+@router.post("/agents/voice/checkins/run", dependencies=[Depends(auth)])
+def voice_checkin_sweep(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    if not features.enabled("ai_client_checkin"):
+        raise HTTPException(422, "fonction ai_client_checkin désactivée "
+                                 "(forfait platinum ou [overrides])")
+    return voice_agent.run_checkin_sweep(db, t)
+
+
+@router.post("/agents/voice/checkin/{cid}", dependencies=[Depends(auth)])
+def voice_checkin_one(cid: int, db: Session = Depends(get_db),
+                      t: str = Depends(tenant)):
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return voice_agent.run_client_checkin(db, t, c)
+
+
+@router.get("/agents/voice/queue", dependencies=[Depends(auth)])
+def voice_queue(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    rows = (db.query(OutboundMessage)
+            .filter(OutboundMessage.tenant_id == t,
+                    OutboundMessage.purpose.in_(
+                        ["voice_priority", "voice_checkin", "missed_call_ack",
+                         "qualification_form"]))
+            .order_by(OutboundMessage.created_at.desc()).limit(50).all())
+    names = {c.id: c.name for c in
+             db.query(Contact).filter_by(tenant_id=t).all()}
+    return [{"id": m.id, "contact": names.get(m.contact_id, f"#{m.contact_id}"),
+             "channel": m.channel, "purpose": m.purpose, "status": m.status,
+             "body": m.body, "created_at": m.created_at.isoformat()}
+            for m in rows]
+
+
+@router.get("/agents/voice/receptionist", dependencies=[Depends(auth)])
+def voice_receptionist_config():
+    return {"enabled": features.enabled("ai_receptionist"),
+            "greetings": voice_agent.receptionist_greetings(),
+            "provider": voice_agent.voice_provider_status(),
+            "webhook": "/api/webhooks/voice-inbound",
+            "twiml": voice_agent.receptionist_twiml()}
+
+
+@router.post("/webhooks/voice-inbound")  # public — telephony provider posts here
+async def voice_inbound(request: Request, format: str = "",
+                        db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Missed-call / voicemail webhook. Accepts our JSON shape
+    ({"from", "name", "transcript", "lang"}) or Twilio's form fields
+    (From, CallerName, TranscriptionText). ?format=twiml answers with the
+    bilingual greeting so a Twilio number can point straight at this URL."""
+    data: dict = {}
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001 — Twilio posts x-www-form-urlencoded
+        try:
+            form = await request.form()
+            data = {"from": form.get("From", ""),
+                    "name": form.get("CallerName", ""),
+                    "transcript": form.get("TranscriptionText", "")}
+        except Exception:  # noqa: BLE001
+            data = {}
+    result = voice_agent.handle_missed_call(
+        db, t, from_number=str(data.get("from", "")),
+        caller_name=str(data.get("name", "") or ""),
+        transcript=str(data.get("transcript", "") or ""),
+        lang=str(data.get("lang", "") or ""))
+    if format == "twiml":
+        return Response(voice_agent.receptionist_twiml(),
+                        media_type="application/xml")
+    return result
+
+
+@router.get("/voice/audio/{msg_id}.mp3")  # public — Twilio <Play>s this URL
+def voice_audio(msg_id: int, db: Session = Depends(get_db)):
+    m = db.get(OutboundMessage, msg_id)
+    if not m or m.channel != "voice":
+        raise HTTPException(404, "message vocal introuvable")
+    audio = voice_agent.synthesize_speech(m.body)
+    if not audio:
+        raise HTTPException(404, "synthèse vocale non configurée "
+                                 "(ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID)")
+    return Response(audio, media_type="audio/mpeg")
+
+
+class QualificationIn(BaseModel):
+    budget: str = ""
+    timeline: str = ""
+    prequalified: bool = False
+    areas: str = ""
+    message: str = ""
+
+
+@router.post("/forms/qualification/{qid}")  # public — the lead submits here
+def qualification_submit(qid: str, body: QualificationIn,
+                         db: Session = Depends(get_db), t: str = Depends(tenant)):
+    cid = voice_agent.parse_qual_token(qid)
+    if cid is None:
+        raise HTTPException(404, "formulaire introuvable")
+    try:
+        c = voice_agent.apply_qualification(db, t, cid, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "priority_score": c.priority_score}
 
 
 # ---------------------------------------------------- vitrine portal APIs --

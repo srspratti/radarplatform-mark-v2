@@ -529,6 +529,15 @@ export default function RealtorDashboard() {
           })}
         </div>
 
+        {/* engagement section header — this board owns the Centris-client
+            engagement score; AI lead priority lives in /ops (📡 Radar) */}
+        <div className="mb-2">
+          <Eyebrow>{T("Clients Centris — score d'engagement (activité Vitrine · Matrix · CRM)", "Centris clients — engagement score (Vitrine · Matrix · CRM activity)")}</Eyebrow>
+          <div className="text-slate-400 mt-0.5" style={{ fontSize: 11 }}>
+            {T("Le score de priorité IA des leads reste dans 📡 Radar (/ops).", "AI lead priority score stays in 📡 Radar (/ops).")}
+          </div>
+        </div>
+
         {/* filters */}
         <div className="flex flex-wrap gap-2 mb-3">
           {FILTERS.map(([key, label, n]) => (

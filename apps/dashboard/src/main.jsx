@@ -60,6 +60,7 @@ const EVENT_TXT = {
   "calculator.used": T("Calculatrice utilisée", "Used the calculator"),
   "section.viewed": T("Section consultée", "Viewed a section"),
   "criteria.updated": T("Critères mis à jour", "Updated search criteria"),
+  "note.added": T("Note personnelle rédigée", "Wrote a personal note"),
   "email.link_clicked": T("Clic sur alerte courriel", "Clicked an email alert"),
   "outreach.sent": T("Alerte courriel envoyée", "Alert email sent"),
 };
