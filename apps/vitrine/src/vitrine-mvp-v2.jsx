@@ -294,7 +294,7 @@ const W = {
   compare_view: 4, chat_message: 5, chat_escalation: 6, broker_message: 22,
   booking_request: 30, reaction_interested: 20, reaction_pass: -5,
   criteria_update: 7, designer_request: 18, shop_item: 3, theme_change: 1, plan_generate: 4, restage_compare: 3,
-  note_saved: 6,
+  note_saved: 6, centris_click: 5,
 };
 const TOPIC_W = { financement: 15, visite: 12, juridique: 8, taxes: 6, copropriete: 6, renovations: 5, chauffage: 4, inclusions: 3, stationnement: 3, quartier: 3, autre: 1 };
 function scoreEvents(evts) {
@@ -321,6 +321,7 @@ function signalsFor(evts, lang) {
   if (has("forecast_view")) out.push({ txt: t("A vu la prévision", "Viewed forecast") });
   if (has("criteria_update")) out.push({ txt: t("Critères mis à jour", "Criteria updated") });
   if (has("note_saved")) out.push({ txt: t("Notes personnelles", "Personal notes") });
+  if (has("centris_click")) out.push({ txt: t("A ouvert la fiche Centris", "Opened the Centris sheet") });
   if (has("commute_calc")) out.push({ txt: t("Calcul trajet", "Commute check") });
   if (has("calc_use")) out.push({ txt: t("Calculatrice", "Calculator") });
   if (has("tour_view")) out.push({ txt: t("Visite 3D", "3D tour") });
@@ -1570,12 +1571,22 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
   const nav = [["tour", "3D"], ["design", "Design"], ["cout", t("Coût", "Cost")], ["prev", t("Prévision", "Forecast")], ["quartier", t("Quartier", "Area")], ["commodites", t("Commodités", "Amenities")], ["risques", t("Risques", "Risks")], ["notes", t("Notes", "Notes")], ["questions", "Questions"], ["messages", "Messages"]];
 
   return (
-    <div className="max-w-2xl mx-auto px-3 sm:px-4 pb-28">
+    // [radar-platform] patch (g): microsite fills the page — max-w-6xl + a
+    // two-column section grid on lg screens (was a single max-w-2xl column).
+    <div className="max-w-6xl mx-auto px-3 sm:px-4 pb-28">
       <div className="pt-5 pb-4 fade-up">
         <button onClick={onBack} className="inline-flex items-center gap-1 mb-2.5 rounded-full px-2.5 py-1" style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 700, color: C.sub }}>← {t("Inscriptions", "Listings")}</button>
-        <div className="flex items-center justify-between gap-2">
-          <Eyebrow>Centris nº {l.id} · {l.area}{l.centrisUrl && <a href={l.centrisUrl} target="_blank" rel="noreferrer" style={{ color: C.metro, marginLeft: 8, fontWeight: 700 }}>{"Voir sur Centris ↗"}</a>}</Eyebrow>
-          <button onClick={onCompare} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1" style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 700, color: C.metro }}><GitCompare size={12} /> {t("Comparer", "Compare")}</button>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <Eyebrow>Centris nº {l.id} · {l.area}</Eyebrow>
+          <span className="inline-flex gap-1.5">
+            {/* the tracked link from the client's own Matrix alert — clicking it
+                registers the visit on Centris (Matrix « visiteurs récents ») */}
+            {l.centrisUrl && <a href={l.centrisUrl} target="_blank" rel="noreferrer"
+              onClick={() => log("centris_click", { url: l.centrisUrl })}
+              className="inline-flex items-center gap-1 rounded-full px-3 py-1"
+              style={{ background: C.metro, color: "#fff", fontSize: 11.5, fontWeight: 700 }}>{t("Voir sur Centris ↗", "View on Centris ↗")}</a>}
+            <button onClick={onCompare} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1" style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 700, color: C.metro }}><GitCompare size={12} /> {t("Comparer", "Compare")}</button>
+          </span>
         </div>
         <h1 style={{ fontFamily: F.disp, fontWeight: 800, fontSize: "clamp(26px,6vw,36px)", color: C.ink, lineHeight: 1.08, margin: "6px 0 4px" }}>{l.addr}</h1>
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -1615,9 +1626,11 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
         </div>
       </div>
 
-      <div className="space-y-4 mt-4">
-        <div ref={refs.tour}><HouseTour3D listing={l} lang={lang} onEvent={log} theme={theme} onThemeChange={(k) => { setTheme(k); log("theme_change", { theme: k }); }} onDesigner={() => refs.design.current?.scrollIntoView({ behavior: "smooth", block: "start" })} /></div>
-        <DesignSection lang={lang} log={log} theme={theme} setTheme={setTheme} refEl={refs.design} />
+      {/* patch (g): sections flow into two columns on desktop; the 3D tour
+          and the design studio keep the full width */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start">
+        <div ref={refs.tour} className="lg:col-span-2"><HouseTour3D listing={l} lang={lang} onEvent={log} theme={theme} onThemeChange={(k) => { setTheme(k); log("theme_change", { theme: k }); }} onDesigner={() => refs.design.current?.scrollIntoView({ behavior: "smooth", block: "start" })} /></div>
+        <div className="lg:col-span-2"><DesignSection lang={lang} log={log} theme={theme} setTheme={setTheme} refEl={refs.design} /></div>
         <CostSection l={l} lang={lang} log={log} refEl={refs.cout} />
         <ForecastSection l={l} lang={lang} log={log} refEl={refs.prev} />
         <HoodSection l={l} lang={lang} refEl={refs.quartier} />
@@ -1805,12 +1818,13 @@ function App() {
 
   const listing = LISTINGS.find((l) => l.id === listingId) || LISTINGS[0];
 
-  function log(type, meta) {
-    const e = { id: `${DEMO_PROSPECT.id}-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: listingId, type, ts: Date.now(), meta: meta || null };
+  function log(type, meta, lid) {
+    const e = { id: `${DEMO_PROSPECT.id}-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: lid || listingId, type, ts: Date.now(), meta: meta || null };
     setEvents((prev) => { const next = [...prev, e]; store.set(K.events, next); return next; });
   }
   function openListing(id) {
     setListingId(id); setView("prospect");
+    resetScroll(); // patch (f): the microsite must open at the very top
     const e = { id: `${DEMO_PROSPECT.id}-visit-${Date.now()}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: id, type: "visit", ts: Date.now(), meta: null };
     setEvents((prev) => { const next = [...prev, e]; store.set(K.events, next); return next; });
   }
@@ -1824,10 +1838,17 @@ function App() {
   }, [ready]);
   // [radar-platform] patch (f): every view change starts at the top — without
   // this, opening a microsite kept the listings-grid scroll offset and the
-  // page appeared to load mid-way down.
-  useEffect(() => {
-    if (typeof window !== "undefined") window.scrollTo(0, 0);
-  }, [view, listingId]);
+  // page appeared to load mid-way down. Reset synchronously on click AND
+  // after render (rAF) so late-mounting content can't restore the old offset.
+  function resetScroll() {
+    if (typeof window === "undefined") return;
+    const up = () => { window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      if (document.body) document.body.scrollTop = 0; };
+    up();
+    if (window.requestAnimationFrame) window.requestAnimationFrame(up);
+  }
+  useEffect(() => { resetScroll(); }, [view, listingId]);
   const setReaction = (r) => setReactions((prev) => { const next = { ...prev, [listingId]: r }; store.set(K.reactions, next); return next; });
   const setChat = (arr) => setChats((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.chats, next); return next; });
   const setDm = (arr) => setDms((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.dms, next); return next; });
@@ -1881,7 +1902,7 @@ function App() {
       </header>
 
       <main>
-        {view === "listings" && <ListingsView lang={lang} onOpen={openListing} />}
+        {view === "listings" && <ListingsView lang={lang} onOpen={openListing} log={log} />}
         {view === "prospect" && (
           <ProspectView key={listingId} l={listing} lang={lang} log={log}
             reaction={reactions[listingId]} setReaction={setReaction}
@@ -2237,6 +2258,7 @@ function browseRows(lang) {
       heatStr: lang === "fr" ? HEAT[l.heating].fr : HEAT[l.heating].en,
       rooms: m.rooms, lot: m.lot, garage: /garage/i.test(l.parkFr), fire: !!m.fire, pool: /piscine/i.test(l.inclFr),
       badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: m.xy, full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
+      centrisUrl: l.centrisUrl || "",
     };
   });
   const extra = EXTRA_LISTINGS.map((e) => ({
@@ -2249,7 +2271,7 @@ const BADGE = {
   price: { fr: "Nouveau prix", en: "New Price", bg: "#E8A33D", fg: "#3A2A08" },
 };
 
-function ListingsView({ lang, onOpen }) {
+function ListingsView({ lang, onOpen, log }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [vm, setVm] = useState("list");
   const [sel, setSel] = useState(null);
@@ -2272,9 +2294,21 @@ function ListingsView({ lang, onOpen }) {
   const yn = (b) => (b ? t("Oui", "Yes") : t("Non", "No"));
 
   const OpenBtn = ({ r, small }) => r.full ? (
-    <button onClick={() => onOpen(r.id)} className={`w-full rounded-xl ${small ? "py-2" : "py-2.5"} inline-flex items-center justify-center gap-1.5`} style={{ background: C.metro, color: "#fff", fontWeight: 800, fontSize: small ? 12.5 : 13.5 }}>
-      {t("Ouvrir le microsite", "Open the microsite")} <ChevronRight size={14} />
-    </button>
+    <div className="flex gap-2">
+      <button onClick={() => onOpen(r.id)} className={`flex-1 rounded-xl ${small ? "py-2" : "py-2.5"} inline-flex items-center justify-center gap-1.5`} style={{ background: C.metro, color: "#fff", fontWeight: 800, fontSize: small ? 12.5 : 13.5 }}>
+        {t("Ouvrir le microsite", "Open the microsite")} <ChevronRight size={14} />
+      </button>
+      {/* tracked Matrix-alert link → the click shows up on Centris' side
+          (Matrix « visiteurs récents ») and in the engagement score */}
+      {r.centrisUrl && (
+        <a href={r.centrisUrl} target="_blank" rel="noreferrer"
+          onClick={() => log && log("centris_click", { url: r.centrisUrl }, r.id)}
+          className={`rounded-xl px-3 ${small ? "py-2" : "py-2.5"} inline-flex items-center justify-center`}
+          style={{ background: C.paper, border: `1.5px solid ${C.line}`, color: C.metro, fontWeight: 800, fontSize: small ? 12.5 : 13.5, whiteSpace: "nowrap" }}>
+          Centris ↗
+        </a>
+      )}
+    </div>
   ) : (
     <div className={`w-full rounded-xl ${small ? "py-2" : "py-2.5"} text-center`} style={{ background: C.snow, border: `1.5px dashed ${C.line}`, color: C.sub, fontWeight: 700, fontSize: small ? 11.5 : 12.5 }}>
       {t("Fiche complète — bientôt · tirée de votre alerte Matrix", "Full sheet — soon · from your Matrix alert")}

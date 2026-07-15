@@ -61,6 +61,7 @@ const EVENT_TXT = {
   "section.viewed": T("Section consultée", "Viewed a section"),
   "criteria.updated": T("Critères mis à jour", "Updated search criteria"),
   "note.added": T("Note personnelle rédigée", "Wrote a personal note"),
+  "centris.clicked": T("Fiche Centris ouverte", "Opened the Centris listing"),
   "email.link_clicked": T("Clic sur alerte courriel", "Clicked an email alert"),
   "outreach.sent": T("Alerte courriel envoyée", "Alert email sent"),
 };

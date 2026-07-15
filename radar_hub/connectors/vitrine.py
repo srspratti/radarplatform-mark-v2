@@ -23,7 +23,7 @@ PORTAL_EVENT_TYPES = {
     "portal.session_started", "listing.viewed", "listing.favorited",
     "listing.shared", "tour3d.viewed", "message.sent", "visit.requested",
     "listing.dwell", "calculator.used", "section.viewed", "criteria.updated",
-    "note.added",
+    "note.added", "centris.clicked",
 }
 
 _EVENT_FR = {
@@ -37,6 +37,7 @@ _EVENT_FR = {
     "section.viewed": "section consultée",
     "criteria.updated": "critères mis à jour",
     "note.added": "note personnelle rédigée",
+    "centris.clicked": "fiche Centris ouverte (visiteur récent Matrix)",
     "email.link_clicked": "clic sur alerte courriel",
     "message.sent": "message envoyé",
     "visit.requested": "visite demandée",

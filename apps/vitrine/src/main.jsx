@@ -52,6 +52,7 @@ const MAP = {
   amenity_view: "section.viewed",
   criteria_update: "criteria.updated",
   note_saved: "note.added",
+  centris_click: "centris.clicked",
 };
 // reaction_pass / theme_change / shop_item / chat_topic / designer_request
 // deliberately stay local — noise or negative signals, not engagement.
