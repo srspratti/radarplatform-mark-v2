@@ -56,6 +56,12 @@ FEATURES: dict[str, tuple[str, str, str]] = {
                           "Piste d'audit Loi 25 / LCAP exportable, par contact."),
     "ai_texts":          ("platinum", "Textos IA de seuil",
                           "Texto automatique quand l'engagement ou la priorité franchit un seuil."),
+    "ai_voice_outreach": ("platinum", "Agent d'appels IA",
+                          "Appel automatisé (voix clonée du courtier) ou texto au lead prioritaire + formulaire + rappel planifié."),
+    "ai_client_checkin": ("platinum", "Relance client IA",
+                          "L'IA recontacte vos clients Centris selon leur score d'engagement — chauds ou inactifs."),
+    "ai_receptionist":   ("platinum", "Réceptionniste vocale IA",
+                          "Répond aux appels manqués en français québécois et en anglais — texto d'excuse, lead créé, rappel planifié."),
 }
 
 _CONFIG_PATH = Path(__file__).resolve().parents[1] / "features.toml"

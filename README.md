@@ -71,7 +71,7 @@ Frontends ship precompiled (`apps/*/dist`); rebuild with
 
 Accepted types: `portal.session_started`, `listing.viewed`,
 `listing.favorited`, `listing.shared`, `tour3d.viewed`, `message.sent`,
-`visit.requested`. `event_id` is the idempotency key.
+`visit.requested`, `note.added`. `event_id` is the idempotency key.
 
 **Client listings** `GET /api/vitrine/listings/{token}` — token-gated, feeds
 the portal. **Portal state** `GET/PUT/DELETE /api/vitrine/storage/{token}/{key}`.
@@ -86,7 +86,17 @@ Haiku only under the 0.75 confidence gate.
 **Follow Up Boss** — `POST /api/connectors/fub/import`,
 `POST /api/connectors/fub/flush-writebacks`.
 **Radar Acheteur bridge** — `POST /api/connectors/acheteur/sync`.
-**Generic events** — `POST /api/events` (23 types, 7 families).
+**Generic events** — `POST /api/events` (31 types, 7 families).
+
+**AI voice agents** (platinum · `/ops` → 🤖 Agents → 📞) —
+`POST /api/agents/voice/outreach/run` (priority-score leads: cloned-voice call
+or SMS + qualification form `/q/{token}` + callback task),
+`POST /api/agents/voice/checkins/run` (engagement-score client check-ins),
+`POST /api/webhooks/voice-inbound` (missed-call receptionist, Québécois FR +
+EN; `?format=twiml` for a Twilio number). Transport: Twilio for SMS/calls,
+ElevenLabs (`ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`) for the broker's
+cloned voice — unset = everything queues "simulated". CASL/Loi 25 gates apply
+(consent registry, one touch per lead, per-client cooldown).
 
 ## Architecture decisions
 

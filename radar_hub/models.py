@@ -208,7 +208,7 @@ class OutboundMessage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(64), index=True)
     contact_id: Mapped[int] = mapped_column(Integer, index=True)
-    channel: Mapped[str] = mapped_column(String(12))            # sms|email|whatsapp
+    channel: Mapped[str] = mapped_column(String(12))            # sms|email|whatsapp|voice
     to_addr: Mapped[str] = mapped_column(String(200), default="")
     body: Mapped[str] = mapped_column(Text, default="")
     purpose: Mapped[str] = mapped_column(String(30), default="")  # auto_ack|sequence|review_ask|…

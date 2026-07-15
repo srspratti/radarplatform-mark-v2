@@ -1,5 +1,5 @@
 """Event registry + ingest pipeline.
-7 families, 28 types. Ingest is idempotent (decision #2) and every ingest
+7 families, 31 types. Ingest is idempotent (decision #2) and every ingest
 re-projects stage + engagement (decisions #1, #4).
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ FAMILIES = {
     "listing.favorited": "browsing", "listing.shared": "browsing",
     "tour3d.viewed": "browsing", "listing.dwell": "browsing",
     "calculator.used": "browsing", "section.viewed": "browsing",
-    "criteria.updated": "browsing",
+    "criteria.updated": "browsing", "note.added": "browsing",
     # communication
     "message.sent": "communication", "email.opened": "communication",
     "call.logged": "communication", "email.link_clicked": "communication",
@@ -42,7 +42,7 @@ ENGAGEMENT_WEIGHTS = {
     "message.sent": 8, "visit.requested": 12, "visit.scheduled": 10,
     "visit.completed": 15, "offer.submitted": 30, "offer.accepted": 40,
     "listing.dwell": 3, "calculator.used": 4, "section.viewed": 1,
-    "criteria.updated": 3, "email.link_clicked": 3,
+    "criteria.updated": 3, "email.link_clicked": 3, "note.added": 4,
 }
 
 VALID_ACTORS = {"client", "realtor", "system"}

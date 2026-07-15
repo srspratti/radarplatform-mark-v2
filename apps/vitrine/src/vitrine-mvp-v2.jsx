@@ -294,6 +294,7 @@ const W = {
   compare_view: 4, chat_message: 5, chat_escalation: 6, broker_message: 22,
   booking_request: 30, reaction_interested: 20, reaction_pass: -5,
   criteria_update: 7, designer_request: 18, shop_item: 3, theme_change: 1, plan_generate: 4, restage_compare: 3,
+  note_saved: 6,
 };
 const TOPIC_W = { financement: 15, visite: 12, juridique: 8, taxes: 6, copropriete: 6, renovations: 5, chauffage: 4, inclusions: 3, stationnement: 3, quartier: 3, autre: 1 };
 function scoreEvents(evts) {
@@ -319,6 +320,7 @@ function signalsFor(evts, lang) {
   if (has("reaction_interested")) out.push({ txt: t("Intéressé·e", "Interested") });
   if (has("forecast_view")) out.push({ txt: t("A vu la prévision", "Viewed forecast") });
   if (has("criteria_update")) out.push({ txt: t("Critères mis à jour", "Criteria updated") });
+  if (has("note_saved")) out.push({ txt: t("Notes personnelles", "Personal notes") });
   if (has("commute_calc")) out.push({ txt: t("Calcul trajet", "Commute check") });
   if (has("calc_use")) out.push({ txt: t("Calculatrice", "Calculator") });
   if (has("tour_view")) out.push({ txt: t("Visite 3D", "3D tour") });
@@ -351,7 +353,7 @@ const store = {
   async set(k, v) { mem[k] = v; try { await window.storage.set(k, JSON.stringify(v)); } catch {} },
   async del(k) { delete mem[k]; try { await window.storage.delete(k); } catch {} },
 };
-const K = { events: "vitrine2_events", reactions: "vitrine2_reactions", chats: "vitrine2_chats", dms: "vitrine2_dms", prefs: "vitrine2_prefs" };
+const K = { events: "vitrine2_events", reactions: "vitrine2_reactions", chats: "vitrine2_chats", dms: "vitrine2_dms", prefs: "vitrine2_prefs", notes: "vitrine2_notes" };
 
 /* ================================================================== */
 /*  Claude API — grounded concierge + live forecast (web_search)       */
@@ -1508,16 +1510,64 @@ function CompareView({ lang, onEvent }) {
 }
 
 /* ================================================================== */
+/*  Personal notes — per listing, saved to the portal (private)        */
+/* ================================================================== */
+function NotesSection({ lang, log, myNotes, setNote, refEl }) {
+  const t = (fr, en) => (lang === "fr" ? fr : en);
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const txt = draft.trim();
+    if (!txt) return;
+    setNote([...myNotes, { id: `n-${Date.now()}`, txt, ts: Date.now() }]);
+    setDraft("");
+    // Only the fact that a note was written is signalled — never its content.
+    log("note_saved", { chars: txt.length });
+  };
+  const del = (id) => setNote(myNotes.filter((n) => n.id !== id));
+  const when = (ts) => new Date(ts).toLocaleString(lang === "fr" ? "fr-CA" : "en-CA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return (
+    <section ref={refEl} className="rounded-2xl p-4 sm:p-5" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+      <SectionHead icon={FileText} title={t("Mes notes", "My notes")} note={t("privées — enregistrées dans votre portail", "private — saved to your portal")} />
+      <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3}
+        placeholder={t("Vos impressions sur cette propriété — questions pour la visite, points à vérifier…", "Your impressions of this property — questions for the visit, things to double-check…")}
+        className="w-full rounded-lg px-2.5 py-2" style={{ border: `1.5px solid ${C.line}`, fontFamily: F.body, fontSize: 13.5, color: C.ink, resize: "vertical" }} />
+      <button onClick={add} disabled={!draft.trim()}
+        className="mt-2 rounded-xl px-4 py-2 inline-flex items-center gap-1.5"
+        style={{ background: draft.trim() ? C.metro : C.line, color: "#fff", fontWeight: 700, fontSize: 13 }}>
+        <Send size={13} /> {t("Enregistrer la note", "Save note")}
+      </button>
+      {myNotes.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {myNotes.slice().reverse().map((n) => (
+            <div key={n.id} className="rounded-xl p-3 flex items-start gap-2" style={{ background: C.snow, border: `1px solid ${C.line}` }}>
+              <div className="min-w-0 flex-1">
+                <div style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.txt}</div>
+                <div style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub, marginTop: 4 }}>{when(n.ts)}</div>
+              </div>
+              <button onClick={() => del(n.id)} aria-label={t("Supprimer la note", "Delete note")} className="p-1 rounded-md" style={{ color: C.sub }}><X size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-2" style={{ fontSize: 10.5, color: C.sub }}>
+        {t("Vos notes vous suivent d’un appareil à l’autre. Leur contenu reste privé — seul le fait que vous prenez des notes est visible par votre courtière.",
+           "Your notes follow you across devices. Their content stays private — your broker only sees that you are taking notes.")}
+      </div>
+    </section>
+  );
+}
+
+/* ================================================================== */
 /*  Prospect view                                                      */
 /* ================================================================== */
-function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, setDm, onCompare, onBack }) {
+function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, setDm, myNotes, setNote, onCompare, onBack }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [booking, setBooking] = useState(false), [passing, setPassing] = useState(false), [toast, setToast] = useState(null), [theme, setTheme] = useState("classique");
-  const refs = { tour: useRef(null), design: useRef(null), cout: useRef(null), prev: useRef(null), quartier: useRef(null), commodites: useRef(null), risques: useRef(null), questions: useRef(null), messages: useRef(null) };
+  const refs = { tour: useRef(null), design: useRef(null), cout: useRef(null), prev: useRef(null), quartier: useRef(null), commodites: useRef(null), risques: useRef(null), notes: useRef(null), questions: useRef(null), messages: useRef(null) };
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
   const goto = (k) => { log("section_view", { s: k }); refs[k].current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
   const heroTotal = useMemo(() => Math.round(mortgageMonthly(l.price * 0.8, 4.39, 25) + (l.taxesMun + l.taxesScol) / 12 + l.condoFees + (l.sqft * HEAT[l.heating].perSqft) / 12 + l.insuranceEst), [l]);
-  const nav = [["tour", "3D"], ["design", "Design"], ["cout", t("Coût", "Cost")], ["prev", t("Prévision", "Forecast")], ["quartier", t("Quartier", "Area")], ["commodites", t("Commodités", "Amenities")], ["risques", t("Risques", "Risks")], ["questions", "Questions"], ["messages", "Messages"]];
+  const nav = [["tour", "3D"], ["design", "Design"], ["cout", t("Coût", "Cost")], ["prev", t("Prévision", "Forecast")], ["quartier", t("Quartier", "Area")], ["commodites", t("Commodités", "Amenities")], ["risques", t("Risques", "Risks")], ["notes", t("Notes", "Notes")], ["questions", "Questions"], ["messages", "Messages"]];
 
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 pb-28">
@@ -1587,6 +1637,7 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
           </div>
           <div className="mt-3" style={{ fontSize: 12.5, color: C.ink }}><b>{t("Inclusions :", "Inclusions:")}</b> {lang === "fr" ? l.inclFr : l.inclEn} · <b>{t("Stationnement :", "Parking:")}</b> {lang === "fr" ? l.parkFr : l.parkEn}</div>
         </section>
+        <NotesSection lang={lang} log={log} myNotes={myNotes} setNote={setNote} refEl={refs.notes} />
         <ChatSection l={l} lang={lang} log={log} chat={chat} setChat={setChat} refEl={refs.questions} />
         <BrokerDMSection l={l} lang={lang} log={log} dm={dm} setDm={setDm} refEl={refs.messages} />
       </div>
@@ -1735,6 +1786,7 @@ function App() {
   const [reactions, setReactions] = useState({});
   const [chats, setChats] = useState({});
   const [dms, setDms] = useState({});
+  const [notes, setNotes] = useState({});
   const [ready, setReady] = useState(false);
   const t = (fr, en) => (lang === "fr" ? fr : en);
 
@@ -1746,6 +1798,7 @@ function App() {
       setReactions((await store.get(K.reactions, {})) || {});
       setChats((await store.get(K.chats, {})) || {});
       setDms((await store.get(K.dms, {})) || {});
+      setNotes((await store.get(K.notes, {})) || {});
       setReady(true);
     })();
   }, []);
@@ -1769,9 +1822,16 @@ function App() {
     delete window.__VITRINE_OPEN__;
     if (LISTINGS.some((l) => String(l.id) === String(id))) openListing(id);
   }, [ready]);
+  // [radar-platform] patch (f): every view change starts at the top — without
+  // this, opening a microsite kept the listings-grid scroll offset and the
+  // page appeared to load mid-way down.
+  useEffect(() => {
+    if (typeof window !== "undefined") window.scrollTo(0, 0);
+  }, [view, listingId]);
   const setReaction = (r) => setReactions((prev) => { const next = { ...prev, [listingId]: r }; store.set(K.reactions, next); return next; });
   const setChat = (arr) => setChats((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.chats, next); return next; });
   const setDm = (arr) => setDms((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.dms, next); return next; });
+  const setNote = (arr) => setNotes((prev) => { const next = { ...prev, [listingId]: arr }; store.set(K.notes, next); return next; });
 
   async function resetDemo() {
     const seeded = seedEvents();
@@ -1827,6 +1887,7 @@ function App() {
             reaction={reactions[listingId]} setReaction={setReaction}
             chat={chats[listingId] || []} setChat={setChat}
             dm={dms[listingId] || []} setDm={setDm}
+            myNotes={notes[listingId] || []} setNote={setNote}
             onCompare={() => setView("compare")} onBack={() => setView("listings")} />
         )}
         {view === "alerts" && <PrefsView lang={lang} log={log} />}
@@ -2032,6 +2093,19 @@ function PrefsView({ lang, log }) {
   useEffect(() => { (async () => { const saved = await store.get(K.prefs, null); if (saved && saved.p) { setP({ ...DEFAULT_PREFS, ...saved.p }); setStatus(saved.status || null); } setLoaded(true); })(); }, []);
   const up = (patch) => setP((c) => ({ ...c, ...patch }));
   const toggleArr = (key, v) => up({ [key]: p[key].includes(v) ? p[key].filter((x) => x !== v) : [...p[key], v] });
+  const setAll = (key, values) => up({ [key]: values });
+  const AllNone = ({ k, all }) => (
+    <span className="inline-flex gap-1" style={{ marginLeft: "auto" }}>
+      <button onClick={() => setAll(k, [...all])} disabled={p[k].length === all.length}
+        style={{ background: "transparent", border: 0, fontSize: 11, fontWeight: 700, color: p[k].length === all.length ? C.line : C.metro }}>
+        ✓ {t("Tout", "All")}
+      </button>
+      <button onClick={() => setAll(k, [])} disabled={p[k].length === 0}
+        style={{ background: "transparent", border: 0, fontSize: 11, fontWeight: 700, color: p[k].length === 0 ? C.line : C.sub }}>
+        ✕ {t("Aucun", "None")}
+      </button>
+    </span>
+  );
   const matches = LISTINGS.filter((l) => {
     const typeOk = p.types.includes(l.condoFees > 0 ? "condo" : "detache");
     const priceOk = l.price >= p.pmin && l.price <= p.pmax;
@@ -2078,7 +2152,7 @@ function PrefsView({ lang, log }) {
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Salles de bain (min)", "Bathrooms (min)")}</div>
           <div className="flex gap-1.5 mb-3">{[1, 1.5, 2].map((n) => <Chip key={n} on={p.baths === n} onClick={() => up({ baths: n })}>{n}+</Chip>)}</div>
           <div className="mb-3"><SliderRow label={t("Terrain (min, pi²)", "Lot area (min, sq ft)")} val={p.lot} set={(v) => up({ lot: v })} min={0} max={30000} step={2500} suffix=" pi²" field="lot" /></div>
-          <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Types de bâtiment", "Building types")}</div>
+          <div className="flex items-center" style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Types de bâtiment", "Building types")}<AllNone k="types" all={TYPES_ALL.map(([k]) => k)} /></div>
           <div className="flex flex-wrap gap-1.5 mb-3">{TYPES_ALL.map(([k, fr, en]) => <Chip key={k} on={p.types.includes(k)} onClick={() => toggleArr("types", k)}>{lang === "fr" ? fr : en}</Chip>)}</div>
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Indispensables", "Must-haves")}</div>
           <div className="flex flex-wrap gap-1.5">
@@ -2089,7 +2163,7 @@ function PrefsView({ lang, log }) {
         </section>
 
         <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
-          <SectionHead icon={MapPin} title={t("Secteurs", "Areas")} note={`${p.areas.length} ${t("choisis", "selected")}`} />
+          <div className="flex items-center"><SectionHead icon={MapPin} title={t("Secteurs", "Areas")} note={`${p.areas.length} ${t("choisis", "selected")}`} /><AllNone k="areas" all={AREAS_ALL} /></div>
           <div className="flex flex-wrap gap-1.5">{AREAS_ALL.map((a) => <Chip key={a} on={p.areas.includes(a)} onClick={() => toggleArr("areas", a)}>{a}</Chip>)}</div>
         </section>
 
@@ -2180,7 +2254,14 @@ function ListingsView({ lang, onOpen }) {
   const [vm, setVm] = useState("list");
   const [sel, setSel] = useState(null);
   const rows = useMemo(() => browseRows(lang), [lang]);
-  const selRow = rows.find((r) => r.id === sel) || null;
+  // Centris-field filters (sectors) — all on by default, individually
+  // toggleable, with one-tap select-all / deselect-all.
+  const allAreas = useMemo(() => [...new Set(rows.map((r) => r.area))], [rows]);
+  const [offAreas, setOffAreas] = useState([]);
+  const toggleArea = (a) => setOffAreas((cur) =>
+    cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]);
+  const shown = rows.filter((r) => !offAreas.includes(r.area));
+  const selRow = shown.find((r) => r.id === sel) || null;
 
   const Row = ({ label, value }) => (
     <div className="flex items-start justify-between gap-3" style={{ fontSize: 12.5, padding: "3px 0" }}>
@@ -2208,7 +2289,7 @@ function ListingsView({ lang, onOpen }) {
         <div>
           <Eyebrow>{t("Vos alertes", "Your alerts")} · {BROKER.name}</Eyebrow>
           <h1 style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 26, color: C.ink, margin: "4px 0 2px" }}>{t("Inscriptions", "Listings")}</h1>
-          <div style={{ fontSize: 12, color: C.sub }}>{rows.length} {t("inscriptions · mêmes données que l’alerte Matrix, meilleure surface", "listings · same data as the Matrix alert, better surface")}</div>
+          <div style={{ fontSize: 12, color: C.sub }}>{shown.length}{offAreas.length ? ` / ${rows.length}` : ""} {t("inscriptions · mêmes données que l’alerte Matrix, meilleure surface", "listings · same data as the Matrix alert, better surface")}</div>
         </div>
         <div className="flex gap-1 p-1 rounded-xl shrink-0" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
           {[["list", List, t("Liste", "List")], ["map", Map, t("Carte", "Map")]].map(([k, Ic, label]) => (
@@ -2219,9 +2300,38 @@ function ListingsView({ lang, onOpen }) {
         </div>
       </div>
 
+      {/* sector filters (Centris fields) + select-all / deselect-all */}
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: C.sub, marginRight: 2 }}>{t("Secteurs", "Areas")}</span>
+        {allAreas.map((a) => {
+          const on = !offAreas.includes(a);
+          return (
+            <button key={a} onClick={() => toggleArea(a)} aria-pressed={on} className="rounded-full px-3 py-1.5"
+              style={{ background: on ? C.metroSoft : C.paper, color: on ? C.metro : C.sub, border: `1.5px solid ${on ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+              {a}
+            </button>
+          );
+        })}
+        <span className="inline-flex gap-1" style={{ marginLeft: 4 }}>
+          <button onClick={() => setOffAreas([])} disabled={!offAreas.length} className="rounded-full px-2.5 py-1.5"
+            style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 700, color: offAreas.length ? C.metro : C.line }}>
+            ✓ {t("Tout sélectionner", "Select all")}
+          </button>
+          <button onClick={() => setOffAreas(allAreas)} disabled={offAreas.length === allAreas.length} className="rounded-full px-2.5 py-1.5"
+            style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 700, color: offAreas.length === allAreas.length ? C.line : C.sub }}>
+            ✕ {t("Tout désélectionner", "Deselect all")}
+          </button>
+        </span>
+      </div>
+      {shown.length === 0 && (
+        <div className="mt-6 rounded-2xl p-6 text-center" style={{ background: C.paper, border: `1.5px dashed ${C.line}`, color: C.sub, fontSize: 13 }}>
+          {t("Aucun secteur sélectionné — réactivez un filtre pour voir les inscriptions.", "No area selected — turn a filter back on to see the listings.")}
+        </div>
+      )}
+
       {vm === "list" && (
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 items-start">
-          {rows.map((r) => (
+          {shown.map((r) => (
             <div key={r.id} className="rounded-2xl overflow-hidden fade-up" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
               {r.video ? (
                 <div className="relative" style={{ background: "#0B0F17" }}>
@@ -2291,7 +2401,7 @@ function ListingsView({ lang, onOpen }) {
               {[["Mont-Tremblant", 18, 14.5], ["Sainte-Adèle", 47, 39.5], ["Montréal", 57, 69], ["Longueuil", 76, 82.5]].map(([lb, x, y]) => (
                 <text key={lb} x={x} y={y} style={{ font: `600 3.1px ${F.body}`, fill: "#5A6577" }}>{lb}</text>
               ))}
-              {rows.map((r) => {
+              {shown.map((r) => {
                 const active = sel === r.id;
                 return (
                   <g key={r.id} transform={`translate(${r.xy[0]}, ${r.xy[1]})`} onClick={() => setSel(r.id)} style={{ cursor: "pointer" }}>
