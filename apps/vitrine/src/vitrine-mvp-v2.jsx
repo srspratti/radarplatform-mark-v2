@@ -1318,8 +1318,10 @@ function CompsSection({ l, lang }) {
 function ChatSection({ l, lang, log, chat, setChat, refEl }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [input, setInput] = useState(""), [busy, setBusy] = useState(false), [err, setErr] = useState(false);
-  const bottomRef = useRef(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [chat, busy]);
+  // [radar-platform] patch (h): autoscroll the chat BOX only — scrollIntoView
+  // also scrolled the page itself, so opening a microsite landed at the bottom.
+  const boxRef = useRef(null);
+  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [chat, busy]);
   const chips = lang === "fr"
     ? ["Le toit a quel âge ?", "Des dégâts d’eau déclarés ?", "Frais de condo et taxes ?", "Puis-je visiter samedi ?"]
     : ["How old is the roof?", "Any declared water damage?", "Condo fees and taxes?", "Can I visit Saturday?"];
@@ -1338,7 +1340,7 @@ function ChatSection({ l, lang, log, chat, setChat, refEl }) {
   return (
     <section ref={refEl} className="rounded-2xl p-4 sm:p-5" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
       <SectionHead icon={MessageCircle} title={t("Questions sur la propriété", "Questions about the property")} note={t("réponses tirées des documents", "answers from the documents")} />
-      <div className="rounded-xl p-3 mb-3 overflow-y-auto" style={{ background: C.snow, border: `1px solid ${C.line}`, height: 240 }}>
+      <div ref={boxRef} className="rounded-xl p-3 mb-3 overflow-y-auto" style={{ background: C.snow, border: `1px solid ${C.line}`, height: 240 }}>
         {chat.length === 0 && (
           <div style={{ fontSize: 13, color: C.sub }}><Sparkles size={14} style={{ display: "inline", color: C.ochre, marginRight: 4 }} />
             {t("Je réponds à partir de la fiche et des déclarations du vendeur — et je cite ma source. Ce que je ne sais pas, je le transmets à ", "I answer from the listing sheet and seller’s declarations — with sources. What I don’t know, I flag to ")}{BROKER.name}.</div>
@@ -1352,7 +1354,6 @@ function ChatSection({ l, lang, log, chat, setChat, refEl }) {
         ))}
         {busy && <div style={{ fontSize: 12.5, color: C.sub, fontFamily: F.mono }} className="my-1.5">{t("consulte les documents…", "checking the documents…")}</div>}
         {err && <div style={{ fontSize: 12.5, color: C.danger }} className="my-1.5">{t("Le service ne répond pas. Réessayez.", "The service didn’t respond. Try again.")}</div>}
-        <div ref={bottomRef} />
       </div>
       <div className="flex flex-wrap gap-1.5 mb-2.5">
         {chips.map((c) => <button key={c} onClick={() => send(c)} className="rounded-full px-2.5 py-1" style={{ background: C.metroSoft, color: C.metro, fontSize: 12, fontWeight: 600, border: "1px solid #C9D9F2" }}>{c}</button>)}
@@ -1373,8 +1374,9 @@ function ChatSection({ l, lang, log, chat, setChat, refEl }) {
 function BrokerDMSection({ l, lang, log, dm, setDm, refEl }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [input, setInput] = useState("");
-  const bottomRef = useRef(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [dm]);
+  // patch (h): container-only autoscroll (see ChatSection)
+  const boxRef = useRef(null);
+  useEffect(() => { const el = boxRef.current; if (el) el.scrollTop = el.scrollHeight; }, [dm]);
   function send() {
     const q = input.trim(); if (!q) return; setInput("");
     const mine = { who: "prospect", text: q, ts: Date.now() };
@@ -1394,7 +1396,7 @@ function BrokerDMSection({ l, lang, log, dm, setDm, refEl }) {
         <div className="rounded-full flex items-center justify-center" style={{ width: 34, height: 34, background: C.metro, color: "#fff", fontWeight: 700, fontFamily: F.disp }}>JF</div>
         <div><div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{BROKER.name}</div><div style={{ fontSize: 11.5, color: C.sub }}>{lang === "fr" ? BROKER.title_fr : BROKER.title_en} · {BROKER.agency}</div></div>
       </div>
-      <div className="rounded-xl p-3 mb-3 overflow-y-auto" style={{ background: C.snow, border: `1px solid ${C.line}`, height: 200 }}>
+      <div ref={boxRef} className="rounded-xl p-3 mb-3 overflow-y-auto" style={{ background: C.snow, border: `1px solid ${C.line}`, height: 200 }}>
         {dm.length === 0 && <div style={{ fontSize: 13, color: C.sub }}>{t("Une question précise, une contre-proposition, une disponibilité? Écrivez directement à Julie — c’est une ligne privée, distincte de l’assistant.", "A specific question, a counter-proposal, your availability? Message Julie directly — this is a private line, separate from the assistant.")}</div>}
         {dm.map((m, i) => m.who === "receipt" ? (
           <div key={i} className="text-right my-1" style={{ fontSize: 10.5, color: C.sub, fontFamily: F.mono }}>✓ {m.text}</div>
@@ -1405,7 +1407,6 @@ function BrokerDMSection({ l, lang, log, dm, setDm, refEl }) {
             </div>
           </div>
         ))}
-        <div ref={bottomRef} />
       </div>
       <div className="flex gap-2">
         <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }}
