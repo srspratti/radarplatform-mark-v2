@@ -71,3 +71,24 @@ voice_checkin_cooldown_days = 14
 # Scripts d'appel personnalisables : voice_lead_script_fr/en,
 # voice_checkin_hot_fr/en, voice_checkin_dormant_fr/en, qualification_sms_fr/en.
 # Voix clonée : définir ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID au déploiement.
+
+# --- Portail : créneaux de visite réels (visit_scheduler_live) ----------------
+# Plages hebdomadaires offertes aux clients ({jour} {heure}); le client choisit,
+# le courtier confirme (tâche + notification).
+visit_slot_days = 5
+visit_slot_times = ["10:00", "11:30", "13:00", "15:30", "17:00", "18:30"]
+
+# --- Référence hypothécaire (mortgage_handoff) --------------------------------
+mortgage_partner_name = "Multi-Prêts — partenaire hypothécaire"
+mortgage_partner_url = ""   # vide = le clic notifie le courtier sans redirection
+
+# --- Rétroaction post-visite (visit_feedback) ---------------------------------
+feedback_window_days = 3    # visites complétées des N derniers jours
+
+# --- Sentinelle d'échéances (deadline_sentinel) --------------------------------
+deadline_warn_days = 3      # alerte N jours avant l'échéance
+
+# --- Intelligence vendeur (seller_intelligence) --------------------------------
+# Fournisseur stub (démo) · slot Registre foncier / JLR prêt. Canaux :
+# lettre/script toujours permis; courriel/SMS avec base LCAP; voix automatisée
+# avec consentement EXPRÈS seulement (règles ADAD du CRTC).

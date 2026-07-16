@@ -100,6 +100,22 @@ def pwa_manifest():
     return JSONResponse(_MANIFEST, media_type="application/manifest+json")
 
 
+@app.get("/portail-manifest.webmanifest", include_in_schema=False)
+def portal_manifest(t: str = ""):
+    """Client-portal manifest (portal_pwa) — start_url carries the client's
+    own token so 'Add to Home Screen' reopens THEIR portal."""
+    safe = "".join(ch for ch in t if ch.isalnum() or ch in "-_")[:64]
+    return JSONResponse({
+        **_MANIFEST,
+        "name": "Vitrine — votre portail immobilier",
+        "short_name": "Vitrine",
+        "description": "Vos inscriptions, visites 3D et alertes personnelles.",
+        "start_url": f"/portail/{safe}" if safe else "/portail",
+        "background_color": "#F6F8FA",
+        "theme_color": "#1656B4",
+    }, media_type="application/manifest+json")
+
+
 @app.get("/sw.js", include_in_schema=False)
 def service_worker():
     return Response(_SW_JS, media_type="application/javascript")
@@ -326,6 +342,94 @@ def qualification_form(qid: str):
     if parse_qual_token(safe) is None:
         return HTMLResponse("<h1>Formulaire introuvable</h1>", status_code=404)
     return HTMLResponse(_QUALIFICATION_PAGE.replace("__QID__", safe))
+
+
+_FEEDBACK_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Votre visite</title></head>
+<body style="margin:0;background:#F6F8FA;font-family:system-ui;color:#111B2E;
+display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box">
+<form id="f" style="max-width:420px;width:100%;padding:28px;background:#fff;
+border:1px solid #DCE2EA;border-radius:16px;position:relative">
+<button type="button" id="lang" style="position:absolute;top:14px;right:14px;
+border:1px solid #DCE2EA;background:#fff;border-radius:99px;padding:5px 10px;
+font-size:12px;font-weight:700;cursor:pointer">🌐 FR</button>
+<div id="t_hi" style="font-weight:800;font-size:22px"></div>
+<p id="t_intro" style="color:#5A6577;font-size:14px;line-height:1.5"></p>
+<div id="l_int" style="font-size:13px;font-weight:700;margin-bottom:6px"></div>
+<div id="stars" style="font-size:28px;letter-spacing:4px;cursor:pointer;margin-bottom:14px"></div>
+<div id="l_price" style="font-size:13px;font-weight:700;margin-bottom:6px"></div>
+<div id="prices" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>
+<textarea id="c" rows="3" style="width:100%;padding:11px;box-sizing:border-box;
+border:1px solid #DCE2EA;border-radius:10px;font-size:14px;resize:vertical"></textarea>
+<button id="t_btn" style="margin-top:12px;width:100%;padding:12px;border:0;
+border-radius:10px;background:#1656B4;color:#fff;font-weight:700;font-size:14px"></button>
+<div id="ok" style="display:none;text-align:center;padding:12px 0 0;color:#2F7D5C;
+font-weight:700"></div>
+</form>
+<script>
+const I18N = {
+  fr: { hi:"Comment était la visite ? 🏡",
+        intro:"3 petites questions — vos réponses ajustent la suite de la recherche.",
+        int:"Votre intérêt pour cette propriété", price:"Le prix vous semble…",
+        prices:[["juste","Juste"],["trop_cher","Trop élevé"],["aubaine","Une aubaine"]],
+        c:"Autre chose à mentionner ? (optionnel)", btn:"Envoyer",
+        ok:"Merci ! Votre courtier ajuste la recherche. ✅", flag:"🌐 FR" },
+  en: { hi:"How was the visit? 🏡",
+        intro:"3 quick questions — your answers fine-tune the search.",
+        int:"Your interest in this property", price:"The price feels…",
+        prices:[["juste","Fair"],["trop_cher","Too high"],["aubaine","A bargain"]],
+        c:"Anything else to mention? (optional)", btn:"Send",
+        ok:"Thanks! Your realtor is adjusting the search. ✅", flag:"🌐 EN" },
+};
+let lang = localStorage.getItem("radar_lang") || "fr";
+let interest = 0, price = "";
+function stars() {
+  document.getElementById("stars").innerHTML = [1,2,3,4,5].map(i =>
+    `<span data-i="${i}" style="color:${i<=interest?"#E8A33D":"#DCE2EA"}">★</span>`).join("");
+}
+function pricesRow() {
+  const d = I18N[lang];
+  document.getElementById("prices").innerHTML = d.prices.map(([k,l]) =>
+    `<button type="button" data-k="${k}" style="border:1.5px solid ${price===k?"#1656B4":"#DCE2EA"};
+     background:${price===k?"#E8EEF9":"#fff"};color:${price===k?"#1656B4":"#111B2E"};
+     border-radius:99px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer">${l}</button>`).join("");
+}
+function apply() {
+  const d = I18N[lang];
+  document.documentElement.lang = lang;
+  t_hi.textContent = d.hi; t_intro.textContent = d.intro;
+  l_int.textContent = d.int; l_price.textContent = d.price;
+  c.placeholder = d.c; t_btn.textContent = d.btn; ok.textContent = d.ok;
+  document.getElementById("lang").textContent = d.flag;
+  stars(); pricesRow();
+}
+document.getElementById("lang").onclick = () => {
+  lang = lang === "fr" ? "en" : "fr";
+  localStorage.setItem("radar_lang", lang); apply();
+};
+document.getElementById("stars").onclick = (e) => {
+  const i = e.target.dataset.i; if (i) { interest = +i; stars(); } };
+document.getElementById("prices").onclick = (e) => {
+  const k = e.target.dataset.k; if (k) { price = k; pricesRow(); } };
+apply();
+document.getElementById("f").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const v = new URLSearchParams(location.search).get("v") || 0;
+  const tok = location.pathname.split("/").pop();
+  const r = await fetch("/api/feedback/" + tok, { method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ visit_event_id: +v, interest: interest || 3,
+                           price_opinion: price, comments: c.value.trim() }) });
+  if (r.ok) { ok.style.display = "block";
+              ev.target.querySelector("#t_btn").disabled = true; }
+};
+</script></body></html>"""
+
+
+@app.get("/fb/{token}", response_class=HTMLResponse, include_in_schema=False)
+def visit_feedback_form(token: str):
+    return HTMLResponse(_FEEDBACK_PAGE)
 
 
 _TRACKER_PAGE = """<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"/>

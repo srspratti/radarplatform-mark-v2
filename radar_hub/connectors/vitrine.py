@@ -23,7 +23,7 @@ PORTAL_EVENT_TYPES = {
     "portal.session_started", "listing.viewed", "listing.favorited",
     "listing.shared", "tour3d.viewed", "message.sent", "visit.requested",
     "listing.dwell", "calculator.used", "section.viewed", "criteria.updated",
-    "note.added", "centris.clicked",
+    "note.added", "centris.clicked", "mortgage.interest",
 }
 
 _EVENT_FR = {
@@ -38,6 +38,8 @@ _EVENT_FR = {
     "criteria.updated": "critères mis à jour",
     "note.added": "note personnelle rédigée",
     "centris.clicked": "fiche Centris ouverte (visiteur récent Matrix)",
+    "mortgage.interest": "intérêt financement hypothécaire",
+    "feedback.submitted": "rétroaction post-visite",
     "email.link_clicked": "clic sur alerte courriel",
     "message.sent": "message envoyé",
     "visit.requested": "visite demandée",
@@ -86,8 +88,18 @@ def handle_vitrine_payload(db: Session, tenant_id: str, payload: dict) -> dict:
         from ..events import project_contact
         project_contact(db, tenant_id, contact.id)
         enqueue_activity_writeback(db, tenant_id, contact)
-        from ..automations import check_engagement_threshold
+        from ..automations import check_engagement_threshold, notify
         check_engagement_threshold(db, tenant_id, contact)
+        # hot portal actions ping the realtor immediately
+        hot = {e.get("type") for e in payload.get("events", [])}
+        if "visit.requested" in hot:
+            notify(db, tenant_id, "booking",
+                   f"📅 {contact.name} demande une visite via la Vitrine",
+                   contact_id=contact.id)
+        if "mortgage.interest" in hot:
+            notify(db, tenant_id, "mortgage",
+                   f"💰 {contact.name} veut parler financement hypothécaire",
+                   contact_id=contact.id)
     return {"ok": True, "ingested": ingested, "deduped": deduped,
             "engagement_score": contact.engagement_score, "stage": contact.stage}
 

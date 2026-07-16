@@ -53,6 +53,8 @@ const MAP = {
   criteria_update: "criteria.updated",
   note_saved: "note.added",
   centris_click: "centris.clicked",
+  mortgage_click: "mortgage.interest",
+  checklist_update: "criteria.updated",
 };
 // reaction_pass / theme_change / shop_item / chat_topic / designer_request
 // deliberately stay local — noise or negative signals, not engagement.
@@ -185,7 +187,7 @@ window.fetch = (url, opts = {}) => {
 };
 
 // --- live listings merge -----------------------------------------------------
-function buildMerge(live) {
+function buildMerge(live, photos) {
   return (demos) => {
     if (!live.length) return demos;
     return live.map((r, i) => {
@@ -193,6 +195,7 @@ function buildMerge(live) {
       const priceRatio = r.price && tpl.price ? r.price / tpl.price : 1;
       return {
         ...tpl,
+        photos: (photos && photos[r.centris_no]) || [],
         id: r.centris_no,
         addr: r.address || `Inscription Centris ${r.centris_no}`,
         area: r.area || tpl.area,
@@ -212,16 +215,58 @@ function buildMerge(live) {
 
 (async () => {
   if (TOKEN) {
+    // portal capabilities + settings + photos, resolved server-side per plan
+    let feat = null;
+    try {
+      const fr = await origFetch(`${HUB}/api/vitrine/features/${TOKEN}`);
+      if (fr.ok) { feat = await fr.json(); window.__VITRINE_FEATURES__ = feat; }
+    } catch (err) { console.warn("radar-bridge: features", err); }
+    let liveCount = 0;
     try {
       const r = await origFetch(`${HUB}/api/vitrine/listings/${TOKEN}`);
       if (r.ok) {
         const live = await r.json();
         if (Array.isArray(live)) {
+          liveCount = live.length;
           live.forEach((l) => { if (l.address) ADDR[l.centris_no] = l.address; });
         }
-        window.__VITRINE_MERGE__ = buildMerge(Array.isArray(live) ? live : []);
+        window.__VITRINE_MERGE__ = buildMerge(Array.isArray(live) ? live : [],
+                                              feat && feat.photos);
       }
     } catch (err) { console.warn("radar-bridge: listings", err); }
+    // live-slot bookings also create a confirm task on the broker's side
+    window.__VITRINE_BOOK__ = feat && feat.features && feat.features.visit_scheduler_live
+      ? (slot, listingId, address) => origFetch(`${HUB}/api/vitrine/book/${TOKEN}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slot, listing_id: listingId || "", address: address || "" }),
+        }).catch(() => {})
+      : null;
+    // portal_pwa: installable portal + a heads-up when new listings land
+    if (feat && feat.features && feat.features.portal_pwa) {
+      const link = document.createElement("link");
+      link.rel = "manifest";
+      link.href = `/portail-manifest.webmanifest?t=${encodeURIComponent(TOKEN)}`;
+      document.head.appendChild(link);
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+      if ("Notification" in window && Notification.permission === "default") {
+        setTimeout(() => Notification.requestPermission(), 4000);
+      }
+      setInterval(async () => {
+        try {
+          const r = await origFetch(`${HUB}/api/vitrine/listings/${TOKEN}`);
+          if (!r.ok) return;
+          const rows = await r.json();
+          if (Array.isArray(rows) && rows.length > liveCount) {
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification("Vitrine", {
+                body: `${rows.length - liveCount} nouvelle(s) inscription(s) dans votre portail`,
+              });
+            }
+            liveCount = rows.length;
+          }
+        } catch { /* offline — retry next tick */ }
+      }, 5 * 60 * 1000);
+    }
     dwell.init();
     // ?listing=<no> deep link (tracked alert-email click) → patch (e) opens it
     const wanted = new URLSearchParams(window.location.search).get("listing");
