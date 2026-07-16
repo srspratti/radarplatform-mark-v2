@@ -171,6 +171,55 @@ class ProspectCandidate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class SellerProspect(Base):
+    """Seller Intelligence: homeowners scored on likelihood to list soon.
+    Outreach is CASL/CRTC-gated — electronic channels (email/SMS) need a
+    consent basis, AUTOMATED voice needs express consent (ADAD rules),
+    letters and human call scripts are always allowed."""
+    __tablename__ = "seller_prospects"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    address: Mapped[str] = mapped_column(String(300), default="")
+    sector: Mapped[str] = mapped_column(String(120), index=True)
+    email: Mapped[str] = mapped_column(String(200), default="")
+    phone: Mapped[str] = mapped_column(String(50), default="")
+    owned_years: Mapped[float] = mapped_column(Float, default=0.0)
+    renewal_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    signals: Mapped[list] = mapped_column(JSON, default=list)  # signal codes
+    sell_score: Mapped[int] = mapped_column(Integer, default=0)
+    score_reasons: Mapped[str] = mapped_column(String(300), default="")
+    provider: Mapped[str] = mapped_column(String(40), default="stub")
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    consent_basis: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    outreach_status: Mapped[str] = mapped_column(String(20), default="none")  # none|drafted|sent
+    contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ListingPhoto(Base):
+    """Real listing photos, broker-uploaded (base64 in sqlite — MVP storage),
+    served to the Vitrine cards instead of the gradient placeholders."""
+    __tablename__ = "listing_photos"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    centris_no: Mapped[str] = mapped_column(String(20), index=True)
+    mime: Mapped[str] = mapped_column(String(40), default="image/jpeg")
+    content: Mapped[str] = mapped_column(Text)  # base64
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class GeoCache(Base):
+    """Geocoding cache (Nominatim) — one lookup per address, ever."""
+    __tablename__ = "geo_cache"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    query: Mapped[str] = mapped_column(String(300), unique=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ContentItem(Base):
     """Content/social agent queue."""
     __tablename__ = "content_queue"

@@ -777,6 +777,10 @@ video {
   min-width: 0px;
 }
 
+.min-w-\[180px\] {
+  min-width: 180px;
+}
+
 .max-w-2xl {
   max-width: 42rem;
 }
@@ -1152,6 +1156,10 @@ video {
 
 .italic {
   font-style: italic;
+}
+
+.line-through {
+  text-decoration-line: line-through;
 }
 
 .shadow {

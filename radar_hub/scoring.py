@@ -50,6 +50,7 @@ SOURCE_BASE = {
     "fub_import": 45,        # third-party portals via FUB
     "own_generated": 40,     # our own capture forms
     "prospecting_agent": 25, # cold, agent-sourced
+    "seller_intel": 30,      # homeowner flagged likely-to-list (seller side)
 }
 
 INTENT_PATTERNS: list[tuple[re.Pattern, int, str]] = [

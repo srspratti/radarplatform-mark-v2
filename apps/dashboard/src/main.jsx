@@ -106,7 +106,7 @@ function toClient(c) {
       ? "$" + Number(lastOffer.payload.amount).toLocaleString("en-CA") : "—",
     stage,
     score: c.engagement_score,
-    trend: 0, // period-over-period trend lands with the analytics phase
+    trend: c.trend || 0, // server-computed: score now vs a week ago
     last: tl.length ? ago(tl[0].ts) : "—",
     source: c.source === "fub_import" && c.sublabel
       ? trSub(c.sublabel) : (SOURCE_LABEL[c.source] || c.source),

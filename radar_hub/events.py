@@ -1,5 +1,5 @@
 """Event registry + ingest pipeline.
-7 families, 32 types. Ingest is idempotent (decision #2) and every ingest
+7 families, 34 types. Ingest is idempotent (decision #2) and every ingest
 re-projects stage + engagement (decisions #1, #4).
 """
 from __future__ import annotations
@@ -23,8 +23,10 @@ FAMILIES = {
     # communication
     "message.sent": "communication", "email.opened": "communication",
     "call.logged": "communication", "email.link_clicked": "communication",
+    "mortgage.interest": "communication",
     # visits
-    "visit.requested": "visits", "visit.scheduled": "visits", "visit.completed": "visits",
+    "visit.requested": "visits", "visit.scheduled": "visits",
+    "visit.completed": "visits", "feedback.submitted": "visits",
     # offers
     "offer.submitted": "offers", "offer.accepted": "offers", "offer.declined": "offers",
     # transaction (QC pipeline incl. notaire)
@@ -44,7 +46,7 @@ ENGAGEMENT_WEIGHTS = {
     "visit.completed": 15, "offer.submitted": 30, "offer.accepted": 40,
     "listing.dwell": 3, "calculator.used": 4, "section.viewed": 1,
     "criteria.updated": 3, "email.link_clicked": 3, "note.added": 4,
-    "centris.clicked": 4,
+    "centris.clicked": 4, "mortgage.interest": 10, "feedback.submitted": 6,
 }
 
 VALID_ACTORS = {"client", "realtor", "system"}

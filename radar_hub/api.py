@@ -12,9 +12,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .config import settings
 from .models import (ConsentRecord, Contact, ContentItem, Event, Expense,
-                     FollowUp, LedgerEntry, Listing, NotificationItem,
-                     OutboundMessage, PortalKV, ProspectCandidate,
-                     WritebackItem, get_db, utcnow)
+                     FollowUp, GeoCache, LedgerEntry, Listing, ListingPhoto,
+                     NotificationItem, OutboundMessage, PortalKV,
+                     ProspectCandidate, SellerProspect, WritebackItem,
+                     get_db, utcnow)
 from .events import ingest_event, FAMILIES
 from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
@@ -26,6 +27,7 @@ from .agents import office_manager as office
 from .agents import prospecting as prospect
 from .agents import content_social as content
 from .agents import voice as voice_agent
+from .agents import seller_intel as seller
 
 router = APIRouter(prefix="/api")
 
@@ -197,7 +199,16 @@ def _client_rich(db: Session, t: str, c: Contact, timeline_limit: int = 100) -> 
               .order_by(Event.ts.desc()).limit(timeline_limit).all())
     wb = (db.query(WritebackItem).filter_by(tenant_id=t, contact_id=c.id)
           .order_by(WritebackItem.created_at.desc()).limit(10).all())
+    # engagement_trend: score today vs score as-of a week ago (same decay
+    # model, evaluated at now-7d over events that existed then)
+    trend = 0
+    if features.enabled("engagement_trend"):
+        from .scoring import engagement_score
+        wk = utcnow() - timedelta(days=7)
+        then = engagement_score([e for e in events if e.ts <= wk], now=wk)
+        trend = c.engagement_score - then
     return {**_contact_out(c),
+            "trend": trend,
             "stage_order": STAGE_ORDER,
             "stage_labels": STAGE_LABELS_FR,
             "score_breakdown": engagement_breakdown(events),
@@ -570,6 +581,436 @@ def qualification_submit(qid: str, body: QualificationIn,
     except ValueError as e:
         raise HTTPException(404, str(e))
     return {"ok": True, "priority_score": c.priority_score}
+
+
+# ------------------------------------------------------ seller intelligence --
+class SellerRunIn(BaseModel):
+    sector: str
+    count: int = 5
+    provider: str = "stub"
+
+
+def _seller_out(p: SellerProspect) -> dict:
+    return {"id": p.id, "name": p.name, "address": p.address,
+            "sector": p.sector, "email": p.email, "phone": p.phone,
+            "owned_years": p.owned_years, "renewal_months": p.renewal_months,
+            "signals": p.signals, "sell_score": p.sell_score,
+            "score_reasons": p.score_reasons, "is_demo": p.is_demo,
+            "consent_basis": p.consent_basis,
+            "outreach_status": p.outreach_status, "contact_id": p.contact_id}
+
+
+@router.post("/agents/seller/run", dependencies=[Depends(auth)])
+def seller_run(body: SellerRunIn, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    _require("seller_intelligence")
+    try:
+        rows = seller.run_discovery(db, t, **body.model_dump())
+    except RuntimeError as e:
+        raise HTTPException(422, str(e))
+    return [_seller_out(p) for p in rows]
+
+
+@router.get("/agents/seller/prospects", dependencies=[Depends(auth)])
+def seller_list(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    rows = (db.query(SellerProspect).filter_by(tenant_id=t)
+            .order_by(SellerProspect.sell_score.desc()).limit(100).all())
+    return [_seller_out(p) for p in rows]
+
+
+@router.get("/agents/seller/market/{sector}", dependencies=[Depends(auth)])
+def seller_market(sector: str):
+    return seller.market_snapshot(sector)
+
+
+@router.post("/agents/seller/prospects/{pid}/consent",
+             dependencies=[Depends(auth)])
+def seller_consent(pid: int, body: ConsentIn, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    if body.consent_basis not in prospect.CASL_BASES:
+        raise HTTPException(422, f"base CASL inconnue. Options: "
+                                 f"{list(prospect.CASL_BASES)}")
+    p = db.get(SellerProspect, pid)
+    if not p or p.tenant_id != t:
+        raise HTTPException(404, "prospect vendeur introuvable")
+    p.consent_basis = body.consent_basis
+    db.commit()
+    return {"id": p.id, "consent_basis": p.consent_basis}
+
+
+class SellerOutreachIn(BaseModel):
+    channel: str  # letter | call | email | sms | voice
+    language: str = "fr"
+    signature: str = "Julie Fortin, RE/MAX du Cartier"
+    send: bool = False
+
+
+@router.post("/agents/seller/prospects/{pid}/outreach",
+             dependencies=[Depends(auth)])
+def seller_outreach(pid: int, body: SellerOutreachIn,
+                    db: Session = Depends(get_db), t: str = Depends(tenant)):
+    _require("seller_intelligence")
+    try:
+        if body.send:
+            return seller.send_outreach(db, t, pid, channel=body.channel,
+                                        language=body.language,
+                                        signature=body.signature)
+        draft = seller.draft_outreach(db, t, pid, channel=body.channel,
+                                      language=body.language,
+                                      signature=body.signature)
+    except prospect.CASLError as e:
+        raise HTTPException(422, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"status": "drafted", "channel": body.channel, "draft": draft}
+
+
+@router.post("/agents/seller/prospects/{pid}/promote",
+             dependencies=[Depends(auth)])
+def seller_promote(pid: int, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    try:
+        c = seller.promote_to_lead(db, t, pid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _contact_out(c)
+
+
+# --------------------------------------------- deadlines / feedback / privacy --
+class DeadlineIn(BaseModel):
+    label: str
+    due_at: datetime
+
+
+@router.post("/contacts/{cid}/deadlines", dependencies=[Depends(auth)])
+def deadline_add(cid: int, body: DeadlineIn, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    _require("deadline_sentinel")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    f = FollowUp(tenant_id=t, contact_id=cid, kind="deadline",
+                 due_at=body.due_at, note=body.label)
+    db.add(f)
+    db.commit()
+    return {"id": f.id, "due_at": f.due_at.isoformat(), "label": f.note}
+
+
+@router.get("/contacts/{cid}/deadlines", dependencies=[Depends(auth)])
+def deadline_list(cid: int, db: Session = Depends(get_db),
+                  t: str = Depends(tenant)):
+    rows = (db.query(FollowUp).filter_by(tenant_id=t, contact_id=cid,
+                                         kind="deadline")
+            .order_by(FollowUp.due_at).all())
+    return [{"id": f.id, "label": f.note, "due_at": f.due_at.isoformat(),
+             "status": f.status} for f in rows]
+
+
+@router.post("/agents/deadlines/run", dependencies=[Depends(auth)])
+def deadline_sweep(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Warn ahead of condition deadlines (financing, inspection…). One
+    notification per deadline per day — safe to run on a schedule."""
+    _require("deadline_sentinel")
+    warn = int(features.setting("deadline_warn_days", 3))
+    horizon = utcnow() + timedelta(days=warn)
+    rows = (db.query(FollowUp)
+            .filter(FollowUp.tenant_id == t, FollowUp.kind == "deadline",
+                    FollowUp.status == "pending", FollowUp.due_at <= horizon)
+            .all())
+    names = {c.id: c.name for c in db.query(Contact).filter_by(tenant_id=t)}
+    warned = 0
+    for f in rows:
+        tag = f"⏳ [{f.id}]"
+        today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        dup = (db.query(NotificationItem)
+               .filter(NotificationItem.tenant_id == t,
+                       NotificationItem.title.like(f"{tag}%"),
+                       NotificationItem.created_at >= today).first())
+        if dup:
+            continue
+        days_left = max(0, (f.due_at - utcnow()).days)
+        _notify(db, t, "deadline",
+                f"{tag} {f.note} — {names.get(f.contact_id, '?')} : échéance "
+                f"dans {days_left} j" + (" ⚠ AUJOURD'HUI" if days_left == 0 else ""),
+                contact_id=f.contact_id)
+        warned += 1
+    return {"checked": len(rows), "warned": warned}
+
+
+@router.post("/agents/feedback/run", dependencies=[Depends(auth)])
+def feedback_sweep(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Post-visit feedback: text a 3-question mini-survey after each completed
+    visit (once per visit event, idempotent)."""
+    _require("visit_feedback")
+    window = int(features.setting("feedback_window_days", 3))
+    since = utcnow() - timedelta(days=window)
+    evs = (db.query(Event)
+           .filter(Event.tenant_id == t, Event.type == "visit.completed",
+                   Event.ts >= since).all())
+    sent = 0
+    from .automations import queue_msg
+    for ev in evs:
+        c = db.get(Contact, ev.contact_id)
+        if not c or not c.phone or not c.portal_token:
+            continue
+        _, created = ingest_event(
+            db, tenant_id=t, contact_id=c.id, etype="outreach.sent",
+            actor="system", origin="hub",
+            payload={"kind": "visit_feedback", "visit_event_id": ev.id},
+            idempotency_key=f"fbreq-{ev.id}", reproject=False)
+        if not created:
+            continue
+        url = f"{settings.PUBLIC_BASE_URL}/fb/{c.portal_token}?v={ev.id}"
+        first = c.name.split()[0] if c.name else ""
+        body = (f"Bonjour {first}, merci pour la visite! 3 petites questions "
+                f"pour ajuster la suite : {url}"
+                if (c.language or "fr") == "fr" else
+                f"Hi {first}, thanks for the visit! 3 quick questions to "
+                f"fine-tune the search: {url}")
+        queue_msg(db, t, c, "sms", body, "visit_feedback")
+        sent += 1
+    return {"visits_checked": len(evs), "surveys_sent": sent}
+
+
+class FeedbackIn(BaseModel):
+    visit_event_id: int = 0
+    interest: int = 3          # 1..5
+    price_opinion: str = ""    # juste | trop_cher | aubaine
+    comments: str = ""
+
+
+@router.post("/feedback/{token}")  # public — the client submits here
+def feedback_submit(token: str, body: FeedbackIn,
+                    db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    ingest_event(db, tenant_id=c.tenant_id, contact_id=c.id,
+                 etype="feedback.submitted", actor="client", origin="vitrine",
+                 payload={"interest": max(1, min(5, body.interest)),
+                          "price_opinion": body.price_opinion[:40],
+                          "comments": body.comments[:400],
+                          "visit_event_id": body.visit_event_id},
+                 idempotency_key=f"fb-{c.id}-{body.visit_event_id or utcnow():%Y%m%d%H%M}"
+                 if not body.visit_event_id else f"fb-{c.id}-{body.visit_event_id}")
+    _notify(db, c.tenant_id, "feedback",
+            f"📝 Rétroaction de visite — {c.name} : intérêt "
+            f"{max(1, min(5, body.interest))}/5"
+            + (f" · {body.price_opinion}" if body.price_opinion else ""),
+            contact_id=c.id)
+    return {"ok": True}
+
+
+@router.get("/privacy/{cid}/export", dependencies=[Depends(auth)])
+def privacy_export(cid: int, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    """Loi 25 — full, portable dump of one person's data."""
+    _require("data_rights")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    evs = db.query(Event).filter_by(tenant_id=t, contact_id=cid).all()
+    msgs = db.query(OutboundMessage).filter_by(tenant_id=t, contact_id=cid).all()
+    cons = db.query(ConsentRecord).filter_by(tenant_id=t, contact_id=cid).all()
+    fups = db.query(FollowUp).filter_by(tenant_id=t, contact_id=cid).all()
+    kv = (db.query(PortalKV).filter_by(tenant_id=t, token=c.portal_token).all()
+          if c.portal_token else [])
+    return {"generated_at": utcnow().isoformat(), "contact": _contact_out(c),
+            "events": [{"type": e.type, "ts": e.ts.isoformat(),
+                        "actor": e.actor, "payload": e.payload} for e in evs],
+            "messages": [{"channel": m.channel, "purpose": m.purpose,
+                          "status": m.status, "body": m.body,
+                          "created_at": m.created_at.isoformat()} for m in msgs],
+            "consents": [{"basis": r.basis, "granted": r.granted,
+                          "source": r.source, "note": r.note,
+                          "recorded_at": r.recorded_at.isoformat()} for r in cons],
+            "followups": [{"kind": f.kind, "note": f.note, "status": f.status,
+                           "due_at": f.due_at.isoformat()} for f in fups],
+            "portal_state": [{"key": r.key, "value": r.value} for r in kv]}
+
+
+class EraseIn(BaseModel):
+    confirm_name: str
+
+
+@router.post("/privacy/{cid}/erase", dependencies=[Depends(auth)])
+def privacy_erase(cid: int, body: EraseIn, db: Session = Depends(get_db),
+                  t: str = Depends(tenant)):
+    """Loi 25 — right to erasure. Deletes the person's data and anonymizes
+    the contact row; the erasure itself is logged (without personal data)."""
+    _require("data_rights")
+    c = db.get(Contact, cid)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    if body.confirm_name.strip().lower() != c.name.strip().lower():
+        raise HTTPException(422, "confirm_name ne correspond pas au contact — "
+                                 "effacement refusé")
+    counts = {}
+    for model, label in ((Event, "events"), (OutboundMessage, "messages"),
+                         (FollowUp, "followups"), (WritebackItem, "writebacks"),
+                         (ConsentRecord, "consents"), (Listing, "listings"),
+                         (NotificationItem, "notifications")):
+        q = db.query(model).filter_by(tenant_id=t, contact_id=cid)
+        counts[label] = q.count()
+        q.delete()
+    if c.portal_token:
+        counts["portal_state"] = (db.query(PortalKV)
+                                  .filter_by(tenant_id=t, token=c.portal_token)
+                                  .count())
+        db.query(PortalKV).filter_by(tenant_id=t, token=c.portal_token).delete()
+    c.name, c.email, c.phone, c.notes = "[supprimé]", "", "", ""
+    c.portal_token, c.intake_email, c.fub_person_id = "", "", ""
+    c.sublabel = c.campaign = ""
+    db.commit()
+    _notify(db, t, "privacy",
+            f"🗑 Effacement Loi 25 exécuté — contact #{cid}",
+            body=", ".join(f"{k}: {v}" for k, v in counts.items()))
+    return {"ok": True, "erased": counts}
+
+
+# ----------------------------------------------- listing photos / geo / book --
+class PhotoIn(BaseModel):
+    content_b64: str
+    mime: str = "image/jpeg"
+    sort: int = 0
+
+
+@router.post("/listings/{centris_no}/photos", dependencies=[Depends(auth)])
+def photo_add(centris_no: str, body: PhotoIn, db: Session = Depends(get_db),
+              t: str = Depends(tenant)):
+    _require("listing_photos")
+    if len(body.content_b64) > 4_000_000:  # ~3 MB decoded
+        raise HTTPException(422, "photo trop lourde (max ~3 Mo)")
+    p = ListingPhoto(tenant_id=t, centris_no=centris_no,
+                     content=body.content_b64, mime=body.mime, sort=body.sort)
+    db.add(p)
+    db.commit()
+    return {"id": p.id, "url": f"/api/listing-photos/{p.id}"}
+
+
+@router.get("/listings/{centris_no}/photos", dependencies=[Depends(auth)])
+def photo_list(centris_no: str, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    rows = (db.query(ListingPhoto).filter_by(tenant_id=t, centris_no=centris_no)
+            .order_by(ListingPhoto.sort).all())
+    return [{"id": p.id, "url": f"/api/listing-photos/{p.id}",
+             "mime": p.mime, "sort": p.sort} for p in rows]
+
+
+@router.delete("/listing-photos/{pid}", dependencies=[Depends(auth)])
+def photo_delete(pid: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    p = db.get(ListingPhoto, pid)
+    if not p or p.tenant_id != t:
+        raise HTTPException(404, "photo introuvable")
+    db.delete(p)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/listing-photos/{pid}")  # public — <img> tags load this
+def photo_serve(pid: int, db: Session = Depends(get_db)):
+    import base64
+    p = db.get(ListingPhoto, pid)
+    if not p:
+        raise HTTPException(404, "photo introuvable")
+    try:
+        raw = base64.b64decode(p.content)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(500, "photo corrompue")
+    return Response(raw, media_type=p.mime,
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/geo")  # public — portal map embeds geocode through the hub
+def geocode(q: str, db: Session = Depends(get_db)):
+    """Address → lat/lon via Nominatim (OSM), cached forever. Fails soft:
+    {found: false} when offline or unmatched — the portal keeps its
+    stylized map."""
+    q = (q or "").strip()[:300]
+    if not q:
+        raise HTTPException(422, "q requis")
+    row = db.query(GeoCache).filter_by(query=q).first()
+    if not row:
+        lat = lon = None
+        try:
+            import httpx
+            r = httpx.get("https://nominatim.openstreetmap.org/search",
+                          params={"q": q, "format": "json", "limit": 1,
+                                  "countrycodes": "ca"},
+                          headers={"User-Agent": "radar-hub/1.0"}, timeout=8)
+            hits = r.json() if r.status_code == 200 else []
+            if hits:
+                lat, lon = float(hits[0]["lat"]), float(hits[0]["lon"])
+        except Exception:  # noqa: BLE001 — geocoding is best-effort
+            pass
+        row = GeoCache(query=q, lat=lat, lon=lon)
+        db.add(row)
+        db.commit()
+    return {"found": row.lat is not None, "lat": row.lat, "lon": row.lon}
+
+
+class BookIn(BaseModel):
+    slot: str
+    listing_id: str = ""
+    address: str = ""
+
+
+@router.post("/vitrine/book/{token}")  # public — live-slot booking
+def vitrine_book(token: str, body: BookIn, db: Session = Depends(get_db)):
+    """The visit.requested event flows through the normal webhook; this call
+    adds the broker side: a confirm task + an immediate notification."""
+    c = _contact_by_token(db, token)
+    db.add(FollowUp(tenant_id=c.tenant_id, contact_id=c.id, kind="callback",
+                    due_at=utcnow() + timedelta(hours=2),
+                    note=f"Confirmer la visite — {body.slot}"
+                         + (f" · {body.address or body.listing_id}"
+                            if (body.address or body.listing_id) else "")))
+    db.commit()
+    _notify(db, c.tenant_id, "booking",
+            f"📅 {c.name} a réservé un créneau : {body.slot}"
+            + (f" ({body.address or body.listing_id})"
+               if (body.address or body.listing_id) else ""),
+            contact_id=c.id)
+    return {"ok": True, "slot": body.slot}
+
+
+@router.get("/vitrine/features/{token}")  # public — the bridge reads this
+def vitrine_features(token: str, db: Session = Depends(get_db),
+                     t: str = Depends(tenant)):
+    """Which portal capabilities are on for this tenant + their settings and
+    the client's listing photos. Demo token gets everything (showroom mode)."""
+    keys = ["listing_photos", "visit_scheduler_live", "offer_checklist",
+            "portal_pwa", "real_map", "co_buyer", "mortgage_handoff"]
+    if token == "demo":
+        flags = {k: True for k in keys}
+        photos: dict = {}
+    else:
+        c = _contact_by_token(db, token)
+        t = c.tenant_id
+        f = features.resolve()["features"]
+        flags = {k: f.get(k, {}).get("enabled", False) for k in keys}
+        photos = {}
+        if flags["listing_photos"]:
+            nos = [r.centris_no for r in db.query(Listing)
+                   .filter_by(tenant_id=t, contact_id=c.id).all()]
+            if nos:
+                for p in (db.query(ListingPhoto)
+                          .filter(ListingPhoto.tenant_id == t,
+                                  ListingPhoto.centris_no.in_(nos))
+                          .order_by(ListingPhoto.sort).all()):
+                    photos.setdefault(p.centris_no, []).append(
+                        f"/api/listing-photos/{p.id}")
+    return {"features": flags,
+            "settings": {
+                "mortgage_partner_name": features.setting(
+                    "mortgage_partner_name", "partenaire hypothécaire"),
+                "mortgage_partner_url": features.setting(
+                    "mortgage_partner_url", ""),
+                "visit_slot_days": int(features.setting("visit_slot_days", 5)),
+                "visit_slot_times": features.setting(
+                    "visit_slot_times",
+                    ["10:00", "11:30", "13:00", "15:30", "17:00", "18:30"]),
+            },
+            "photos": photos}
 
 
 # ---------------------------------------------------- vitrine portal APIs --

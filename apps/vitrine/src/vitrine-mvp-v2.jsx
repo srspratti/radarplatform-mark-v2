@@ -281,6 +281,13 @@ const DEMO_LISTINGS = [
 const LISTINGS = (typeof window !== "undefined" && window.__VITRINE_MERGE__)
   ? window.__VITRINE_MERGE__(DEMO_LISTINGS) : DEMO_LISTINGS;
 
+// [radar-platform] patch (i): plan-resolved portal capabilities — the bridge
+// fetches /api/vitrine/features per token. No bridge (pure demo) → everything
+// on with built-in defaults, so the showroom shows the full product.
+const VF = (typeof window !== "undefined" && window.__VITRINE_FEATURES__) || null;
+const featOn = (k) => (VF && VF.features ? !!VF.features[k] : true);
+const vfSetting = (k, d) => (VF && VF.settings && VF.settings[k] != null ? VF.settings[k] : d);
+
 
 const BROKER = { name: "Julie Fortin", title_fr: "Courtière immobilière résidentielle", title_en: "Residential real estate broker", agency: "RE/MAX du Cartier" };
 const DEMO_PROSPECT = { id: "p_live", name: "Marie-Claude Tremblay" };
@@ -294,7 +301,7 @@ const W = {
   compare_view: 4, chat_message: 5, chat_escalation: 6, broker_message: 22,
   booking_request: 30, reaction_interested: 20, reaction_pass: -5,
   criteria_update: 7, designer_request: 18, shop_item: 3, theme_change: 1, plan_generate: 4, restage_compare: 3,
-  note_saved: 6, centris_click: 5,
+  note_saved: 6, centris_click: 5, mortgage_click: 12, checklist_update: 2,
 };
 const TOPIC_W = { financement: 15, visite: 12, juridique: 8, taxes: 6, copropriete: 6, renovations: 5, chauffage: 4, inclusions: 3, stationnement: 3, quartier: 3, autre: 1 };
 function scoreEvents(evts) {
@@ -322,6 +329,7 @@ function signalsFor(evts, lang) {
   if (has("criteria_update")) out.push({ txt: t("Critères mis à jour", "Criteria updated") });
   if (has("note_saved")) out.push({ txt: t("Notes personnelles", "Personal notes") });
   if (has("centris_click")) out.push({ txt: t("A ouvert la fiche Centris", "Opened the Centris sheet") });
+  if (has("mortgage_click")) out.push({ txt: t("Intérêt financement", "Mortgage interest"), hot: true });
   if (has("commute_calc")) out.push({ txt: t("Calcul trajet", "Commute check") });
   if (has("calc_use")) out.push({ txt: t("Calculatrice", "Calculator") });
   if (has("tour_view")) out.push({ txt: t("Visite 3D", "3D tour") });
@@ -354,7 +362,7 @@ const store = {
   async set(k, v) { mem[k] = v; try { await window.storage.set(k, JSON.stringify(v)); } catch {} },
   async del(k) { delete mem[k]; try { await window.storage.delete(k); } catch {} },
 };
-const K = { events: "vitrine2_events", reactions: "vitrine2_reactions", chats: "vitrine2_chats", dms: "vitrine2_dms", prefs: "vitrine2_prefs", notes: "vitrine2_notes" };
+const K = { events: "vitrine2_events", reactions: "vitrine2_reactions", chats: "vitrine2_chats", dms: "vitrine2_dms", prefs: "vitrine2_prefs", notes: "vitrine2_notes", checklist: "vitrine2_checklist" };
 
 /* ================================================================== */
 /*  Claude API — grounded concierge + live forecast (web_search)       */
@@ -1423,8 +1431,11 @@ function BrokerDMSection({ l, lang, log, dm, setDm, refEl }) {
 function BookingModal({ l, lang, log, onClose }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [day, setDay] = useState(null), [time, setTime] = useState(null), [done, setDone] = useState(false);
-  const days = useMemo(() => Array.from({ length: 5 }, (_, i) => new Date(Date.now() + i * 864e5).toLocaleDateString(lang === "fr" ? "fr-CA" : "en-CA", { weekday: "short", day: "numeric", month: "short" })), [lang]);
-  const times = ["10:00", "11:30", "13:00", "15:30", "17:00", "18:30"];
+  // patch (i): live slots — the broker's real availability template when the
+  // visit_scheduler_live plan feature is on (served via /api/vitrine/features)
+  const nDays = Number(vfSetting("visit_slot_days", 5)) || 5;
+  const days = useMemo(() => Array.from({ length: nDays }, (_, i) => new Date(Date.now() + i * 864e5).toLocaleDateString(lang === "fr" ? "fr-CA" : "en-CA", { weekday: "short", day: "numeric", month: "short" })), [lang, nDays]);
+  const times = vfSetting("visit_slot_times", ["10:00", "11:30", "13:00", "15:30", "17:00", "18:30"]);
   const ChipBtn = ({ v, cur, set }) => (
     <button onClick={() => set(v)} className="rounded-lg px-2.5 py-1.5" style={{ border: `1.5px solid ${cur === v ? C.metro : C.line}`, background: cur === v ? C.metroSoft : C.paper, color: cur === v ? C.metro : C.ink, fontSize: 13, fontWeight: 600 }}>{v}</button>
   );
@@ -1442,7 +1453,12 @@ function BookingModal({ l, lang, log, onClose }) {
           <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 12 }}>{l.addr}</div>
           <div className="flex flex-wrap gap-1.5 mb-3">{days.map((d) => <ChipBtn key={d} v={d} cur={day} set={setDay} />)}</div>
           <div className="flex flex-wrap gap-1.5 mb-4">{times.map((h) => <ChipBtn key={h} v={h} cur={time} set={setTime} />)}</div>
-          <button disabled={!day || !time} onClick={() => { log("booking_request", { when: `${day} ${time}` }); setDone(true); }} className="w-full rounded-xl py-3" style={{ background: !day || !time ? C.line : C.metro, color: "#fff", fontWeight: 700, fontSize: 15 }}>{t("Demander cette plage", "Request this slot")}</button>
+          <button disabled={!day || !time} onClick={() => {
+            log("booking_request", { when: `${day} ${time}` });
+            // live slots: also create the broker-side confirm task right away
+            if (typeof window !== "undefined" && window.__VITRINE_BOOK__) window.__VITRINE_BOOK__(`${day} ${time}`, l.id, l.addr);
+            setDone(true);
+          }} className="w-full rounded-xl py-3" style={{ background: !day || !time ? C.line : C.metro, color: "#fff", fontWeight: 700, fontSize: 15 }}>{t("Demander cette plage", "Request this slot")}</button>
         </div>
       )}
     </Modal>
@@ -1508,6 +1524,94 @@ function CompareView({ lang, onEvent }) {
       </div>
       <div className="mt-3" style={{ fontSize: 10.5, color: C.sub, fontFamily: F.mono }}>{t("Coûts et prévisions = estimations du modèle, non garanties.", "Costs and forecasts = model estimates, not guaranteed.")}</div>
     </div>
+  );
+}
+
+/* ================================================================== */
+/*  patch (i) portal capabilities: real map, checklist, mortgage CTA   */
+/* ================================================================== */
+function RealMapEmbed({ addr, lang }) {
+  const [pos, setPos] = useState(undefined);   // undefined=loading · null=absent
+  useEffect(() => {
+    let alive = true;
+    setPos(undefined);
+    fetch(`/api/geo?q=${encodeURIComponent(addr)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive) setPos(d && d.found ? { lat: d.lat, lon: d.lon } : null); })
+      .catch(() => { if (alive) setPos(null); });
+    return () => { alive = false; };
+  }, [addr]);
+  if (pos === null) return null;               // unmatched/offline → stylized map only
+  if (pos === undefined) return <div style={{ fontSize: 11, color: C.sub, fontFamily: F.mono, marginTop: 8 }}>{lang === "fr" ? "carte réelle…" : "loading map…"}</div>;
+  const d = 0.004;
+  const bbox = `${pos.lon - d},${pos.lat - d},${pos.lon + d},${pos.lat + d}`;
+  return (
+    <div className="mt-2.5 rounded-xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+      <iframe title={lang === "fr" ? "Carte du secteur" : "Area map"} width="100%" height="200" loading="lazy" style={{ border: 0, display: "block" }}
+        src={`https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${pos.lat},${pos.lon}`} />
+      <div style={{ fontSize: 10, color: C.sub, fontFamily: F.mono, padding: "3px 8px" }}>© OpenStreetMap</div>
+    </div>
+  );
+}
+
+const CHECKLIST_ITEMS = [
+  ["preapprobation", "Préapprobation hypothécaire obtenue", "Mortgage pre-approval in hand"],
+  ["mise_de_fonds", "Preuve de mise de fonds prête", "Proof of down payment ready"],
+  ["identite", "Pièces d'identité valides", "Valid ID documents"],
+  ["inspecteur", "Inspecteur en bâtiment choisi", "Building inspector chosen"],
+  ["notaire", "Notaire choisi", "Notary chosen"],
+  ["assurance", "Soumission d'assurance habitation demandée", "Home insurance quote requested"],
+  ["certificat", "Certificat de localisation à réviser avec la courtière", "Certificate of location to review with the broker"],
+];
+function OfferChecklistSection({ lang, log }) {
+  const t = (fr, en) => (lang === "fr" ? fr : en);
+  const [done, setDone] = useState({});
+  useEffect(() => { (async () => setDone((await store.get(K.checklist, {})) || {}))(); }, []);
+  const toggle = (k) => {
+    const next = { ...done, [k]: !done[k] };
+    setDone(next); store.set(K.checklist, next);
+    log("checklist_update", { kind: "offer_checklist",
+      done: Object.values(next).filter(Boolean).length, total: CHECKLIST_ITEMS.length });
+  };
+  const n = Object.values(done).filter(Boolean).length;
+  return (
+    <section className="rounded-2xl p-4 sm:p-5" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+      <SectionHead icon={FileText} title={t("Prêt·e pour une offre ?", "Ready to make an offer?")} note={`${n}/${CHECKLIST_ITEMS.length}`} />
+      <div className="rounded-full overflow-hidden mb-3" style={{ height: 8, background: C.snow, border: `1px solid ${C.line}` }}>
+        <div className="seg-grow" style={{ width: `${(n / CHECKLIST_ITEMS.length) * 100}%`, height: "100%", background: C.spruce }} />
+      </div>
+      <div className="space-y-1.5">
+        {CHECKLIST_ITEMS.map(([k, fr, en]) => (
+          <label key={k} className="flex items-start gap-2.5" style={{ cursor: "pointer", fontSize: 13.5, color: done[k] ? C.sub : C.ink }}>
+            <input type="checkbox" checked={!!done[k]} onChange={() => toggle(k)} style={{ marginTop: 3, accentColor: C.spruce }} />
+            <span style={{ textDecoration: done[k] ? "line-through" : "none" }}>{lang === "fr" ? fr : en}</span>
+          </label>
+        ))}
+      </div>
+      <div className="mt-2" style={{ fontSize: 10.5, color: C.sub }}>
+        {t("Votre progression est visible par votre courtière — elle saura quand vous êtes prêt·e à déposer.", "Your progress is visible to your broker — she'll know when you're ready to submit.")}
+      </div>
+    </section>
+  );
+}
+
+function MortgageCTA({ lang, log }) {
+  const t = (fr, en) => (lang === "fr" ? fr : en);
+  const name = vfSetting("mortgage_partner_name", t("partenaire hypothécaire", "mortgage partner"));
+  const url = vfSetting("mortgage_partner_url", "");
+  const [sent, setSent] = useState(false);
+  return (
+    <section className="rounded-2xl p-4 flex items-center gap-3 flex-wrap" style={{ background: C.spruceSoft, border: "1px solid #C4E0D2" }}>
+      <DollarSign size={20} style={{ color: C.spruce, flexShrink: 0 }} />
+      <div className="flex-1 min-w-[180px]">
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.ink }}>{t("Prêt·e à parler financement ?", "Ready to talk financing?")}</div>
+        <div style={{ fontSize: 12, color: C.sub }}>{t(`Votre courtière vous met en contact — ${name}.`, `Your broker connects you — ${name}.`)}</div>
+      </div>
+      <button onClick={() => { if (sent) return; log("mortgage_click", { partner: name }); setSent(true); if (url) window.open(url, "_blank", "noopener"); }}
+        style={{ background: sent ? C.line : C.spruce, color: "#fff", fontWeight: 700, fontSize: 13, borderRadius: 12, padding: "10px 14px", cursor: sent ? "default" : "pointer" }}>
+        {sent ? t("Demande notée ✓", "Request noted ✓") : t("Oui, je veux en parler", "Yes, let's talk")}
+      </button>
+    </section>
   );
 }
 
@@ -1610,6 +1714,11 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2 -mx-3 px-3">
+        {featOn("listing_photos") && (l.photos || []).slice(0, 6).map((u, i) => (
+          <img key={u} src={u} alt={`${l.addr} — photo ${i + 1}`}
+            className="flex-shrink-0 rounded-xl"
+            style={{ width: i === 0 ? 210 : 150, height: 120, objectFit: "cover" }} />
+        ))}
         {l.rooms.map((r, i) => { const Ic = r.icon; return (
           <div key={i} className="flex-shrink-0 rounded-xl relative overflow-hidden" style={{ width: i === 0 ? 210 : 150, height: 120, background: `linear-gradient(150deg, ${r.g[0]}, ${r.g[1]})` }}>
             <Ic size={26} style={{ color: "rgba(255,255,255,.85)", position: "absolute", top: 10, left: 10 }} />
@@ -1633,6 +1742,7 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
         <div ref={refs.tour} className="lg:col-span-2"><HouseTour3D listing={l} lang={lang} onEvent={log} theme={theme} onThemeChange={(k) => { setTheme(k); log("theme_change", { theme: k }); }} onDesigner={() => refs.design.current?.scrollIntoView({ behavior: "smooth", block: "start" })} /></div>
         <div className="lg:col-span-2"><DesignSection lang={lang} log={log} theme={theme} setTheme={setTheme} refEl={refs.design} /></div>
         <CostSection l={l} lang={lang} log={log} refEl={refs.cout} />
+        {featOn("mortgage_handoff") && <MortgageCTA lang={lang} log={log} />}
         <ForecastSection l={l} lang={lang} log={log} refEl={refs.prev} />
         <HoodSection l={l} lang={lang} refEl={refs.quartier} />
         <AmenitiesSection l={l} lang={lang} log={log} refEl={refs.commodites} />
@@ -1652,6 +1762,7 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
           <div className="mt-3" style={{ fontSize: 12.5, color: C.ink }}><b>{t("Inclusions :", "Inclusions:")}</b> {lang === "fr" ? l.inclFr : l.inclEn} · <b>{t("Stationnement :", "Parking:")}</b> {lang === "fr" ? l.parkFr : l.parkEn}</div>
         </section>
         <NotesSection lang={lang} log={log} myNotes={myNotes} setNote={setNote} refEl={refs.notes} />
+        {featOn("offer_checklist") && <OfferChecklistSection lang={lang} log={log} />}
         <ChatSection l={l} lang={lang} log={log} chat={chat} setChat={setChat} refEl={refs.questions} />
         <BrokerDMSection l={l} lang={lang} log={log} dm={dm} setDm={setDm} refEl={refs.messages} />
       </div>
@@ -1792,6 +1903,28 @@ function RealtorProfile({ lang }) {
 }
 
 /* --------------------------- App shell ---------------------------- */
+// co_buyer: names the person browsing (couples share one portal) — every
+// logged action then carries `who`, visible on the broker's timeline.
+function WhoChip({ lang }) {
+  const t = (fr, en) => (lang === "fr" ? fr : en);
+  const [who, setWho] = useState(
+    (typeof localStorage !== "undefined" && localStorage.getItem("vitrine2_who")) || "");
+  const ask = () => {
+    const v = window.prompt(t("Qui explore présentement ? (prénom)", "Who's browsing right now? (first name)"), who || "");
+    if (v != null && typeof localStorage !== "undefined") {
+      localStorage.setItem("vitrine2_who", v.trim());
+      setWho(v.trim());
+    }
+  };
+  return (
+    <button onClick={ask} title={t("Mode co-acheteur — identifier qui navigue", "Co-buyer mode — say who's browsing")}
+      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1.5"
+      style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 12, fontWeight: 700, color: who ? C.metro : C.sub }}>
+      👤 {who || t("Qui ?", "Who?")}
+    </button>
+  );
+}
+
 function App() {
   const [lang, setLang] = useState("fr");
   const [view, setView] = useState("listings");
@@ -1820,7 +1953,13 @@ function App() {
   const listing = LISTINGS.find((l) => l.id === listingId) || LISTINGS[0];
 
   function log(type, meta, lid) {
-    const e = { id: `${DEMO_PROSPECT.id}-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: lid || listingId, type, ts: Date.now(), meta: meta || null };
+    // co_buyer: every action names who did it (couples sharing one portal)
+    let m = meta || null;
+    if (featOn("co_buyer") && typeof localStorage !== "undefined") {
+      const who = localStorage.getItem("vitrine2_who") || "";
+      if (who) m = { ...(m || {}), who };
+    }
+    const e = { id: `${DEMO_PROSPECT.id}-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, pid: DEMO_PROSPECT.id, pname: DEMO_PROSPECT.name, lid: lid || listingId, type, ts: Date.now(), meta: m };
     setEvents((prev) => { const next = [...prev, e]; store.set(K.events, next); return next; });
   }
   function openListing(id) {
@@ -1887,9 +2026,12 @@ function App() {
               <span style={{ width: 28, height: 28, borderRadius: 8, background: C.ink, color: "#fff", display: "grid", placeItems: "center", fontFamily: F.disp, fontWeight: 800, fontSize: 15 }}>V</span>
               <div style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 17, color: C.ink, letterSpacing: "-.01em" }}>Vitrine</div>
             </div>
-            <button onClick={() => setLang((x) => (x === "fr" ? "en" : "fr"))} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5" style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 12, fontWeight: 700, color: C.ink }}>
-              <Globe size={13} /> {lang === "fr" ? "FR" : "EN"}
-            </button>
+            <span className="inline-flex gap-1.5">
+              {featOn("co_buyer") && <WhoChip lang={lang} />}
+              <button onClick={() => setLang((x) => (x === "fr" ? "en" : "fr"))} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5" style={{ background: C.paper, border: `1px solid ${C.line}`, fontSize: 12, fontWeight: 700, color: C.ink }}>
+                <Globe size={13} /> {lang === "fr" ? "FR" : "EN"}
+              </button>
+            </span>
           </div>
           <div className="flex gap-1 pb-2">
             {views.map(([k, Icon, label]) => (
@@ -2259,7 +2401,7 @@ function browseRows(lang) {
       heatStr: lang === "fr" ? HEAT[l.heating].fr : HEAT[l.heating].en,
       rooms: m.rooms, lot: m.lot, garage: /garage/i.test(l.parkFr), fire: !!m.fire, pool: /piscine/i.test(l.inclFr),
       badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: m.xy, full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
-      centrisUrl: l.centrisUrl || "",
+      centrisUrl: l.centrisUrl || "", photos: (featOn("listing_photos") && l.photos) || [],
     };
   });
   const extra = EXTRA_LISTINGS.map((e) => ({
@@ -2368,7 +2510,26 @@ function ListingsView({ lang, onOpen, log }) {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 items-start">
           {shown.map((r) => (
             <div key={r.id} className="rounded-2xl overflow-hidden fade-up" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
-              {r.video ? (
+              {r.photos && r.photos.length ? (
+                /* patch (i): real broker-uploaded photos replace the gradient */
+                <div className="relative" style={{ background: "#0B0F17" }}>
+                  <img src={r.photos[0]} alt={r.addr} style={{ width: "100%", display: "block", height: 170, objectFit: "cover" }} />
+                  {r.photos.length > 1 && (
+                    <span className="absolute" style={{ bottom: 10, left: 12, background: "rgba(17,27,46,.72)", color: "#fff", borderRadius: 999, padding: "3px 9px", fontSize: 11, fontWeight: 700 }}>
+                      📷 {r.photos.length}
+                    </span>
+                  )}
+                  {r.badge && (
+                    <span className="absolute" style={{ top: 12, right: 12, background: BADGE[r.badge].bg, color: BADGE[r.badge].fg, borderRadius: 999, padding: "4px 10px", fontSize: 11, fontWeight: 800 }}>
+                      {lang === "fr" ? BADGE[r.badge].fr : BADGE[r.badge].en}
+                    </span>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 px-3.5 py-2" style={{ background: "linear-gradient(transparent, rgba(17,27,46,.72))" }}>
+                    <div style={{ color: "#fff", fontFamily: F.disp, fontWeight: 800, fontSize: 17, lineHeight: 1.1 }}>{r.addr}</div>
+                    <div style={{ color: "rgba(255,255,255,.85)", fontSize: 11.5 }}>{r.area}</div>
+                  </div>
+                </div>
+              ) : r.video ? (
                 <div className="relative" style={{ background: "#0B0F17" }}>
                   <video src={r.video} controls playsInline muted loop preload="metadata" style={{ width: "100%", display: "block", maxHeight: 260 }} />
                   <div className="absolute top-2 left-2" style={{ pointerEvents: "none" }}><Disclosure text={lang === "fr" ? "Vidéo générée par IA — indicative" : "AI-generated video — indicative"} /></div>
@@ -2462,6 +2623,7 @@ function ListingsView({ lang, onOpen, log }) {
                 </div>
                 <div style={{ fontFamily: F.mono, fontWeight: 600, fontSize: 18, color: C.metro, whiteSpace: "nowrap" }}>{fmt$(selRow.price, lang)}</div>
               </div>
+              {featOn("real_map") && <RealMapEmbed addr={`${selRow.addr}, ${selRow.area}`} lang={lang} />}
               <div className="mt-2.5"><OpenBtn r={selRow} small /></div>
             </div>
           ) : (

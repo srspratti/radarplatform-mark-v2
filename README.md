@@ -89,6 +89,25 @@ Haiku only under the 0.75 confidence gate.
 **Radar Acheteur bridge** — `POST /api/connectors/acheteur/sync`.
 **Generic events** — `POST /api/events` (32 types, 7 families).
 
+**Seller Intelligence** (platinum · `/ops` → 🤖 Agents → 🏠) —
+`POST /api/agents/seller/run` (likely-to-list scoring: tenure, renewal
+window, succession, FSBO, assessment gap), `GET /api/agents/seller/market/{sector}`
+(market-conditions snapshot that shapes the outreach copy),
+`POST …/prospects/{id}/outreach` (letter/call always; email/SMS need a CASL
+basis; automated voice needs EXPRESS consent — CRTC ADAD), `…/promote`.
+
+**Portal capabilities** (per-plan, served by `GET /api/vitrine/features/{token}`)
+— real listing photos (`POST /api/listings/{no}/photos`), live visit slots
+(`POST /api/vitrine/book/{token}`), offer-readiness checklist, installable
+portal + new-listing notifications (`/portail-manifest.webmanifest`),
+OSM real map (`GET /api/geo`), co-buyer mode, mortgage handoff
+(`mortgage.interest` event). Plus: engagement trend (week-over-week on
+`/api/dashboard/clients-rich`), deadline sentinel
+(`POST /api/agents/deadlines/run`), post-visit feedback
+(`POST /api/agents/feedback/run` → `/fb/{token}`), Loi 25 data rights
+(`GET /api/privacy/{cid}/export`, `POST /api/privacy/{cid}/erase`). Every
+capability is a feature flag — tier or `[overrides]` in `features.toml`.
+
 **AI voice agents** (platinum · `/ops` → 🤖 Agents → 📞) —
 `POST /api/agents/voice/outreach/run` (priority-score leads: cloned-voice call
 or SMS + qualification form `/q/{token}` + callback task),

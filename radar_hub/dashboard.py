@@ -96,6 +96,7 @@ const SOURCE_META = {
   danny_channel:     { label:"RÉFÉRENCE",    cls:"bg-emerald-400/15 text-emerald-300 border-emerald-400/40" },
   own_generated:     { label:"SITE WEB",     cls:"bg-violet-400/15 text-violet-300 border-violet-400/40" },
   prospecting_agent: { label:"PROSPECTION",  cls:"bg-slate-400/15 text-slate-300 border-slate-400/40" },
+  seller_intel:      { label:"VENDEUR",      cls:"bg-rose-400/15 text-rose-300 border-rose-400/40" },
 };
 const ORIGIN_ICON = { vitrine:"🛰", matrix:"📡", fub:"🔁", hub:"⚙", agent:"🤖" };
 
@@ -171,7 +172,7 @@ function Stepper({order, labels, current}) {
 
 // -------------------------------------------- follow-ups + open house ------
 const FU_ICON = {sequence:"⏰", anniversary:"🎂", tax_season:"🧾",
-                 equity_report:"📈", review_ask:"⭐", callback:"📞"};
+                 equity_report:"📈", review_ask:"⭐", callback:"📞", deadline:"⏳"};
 
 function FollowupsPanel({toast}) {
   const [due,setDue]=useState([]);
@@ -311,6 +312,19 @@ function RadarView({toast, on, feats}) {
         {T("📊 Ouvrir le tableau d'engagement ↗","📊 Open the engagement dashboard ↗")}</a>
     </div>}
     {on && (on("sequences")||on("client_for_life")||on("review_engine")) && <FollowupsPanel toast={toast}/>}
+    {on && (on("deadline_sentinel")||on("visit_feedback")) && <div className="flex gap-2 flex-wrap items-center">
+      <span className="mono text-[10px] text-[var(--mute)]">{T("▮ BALAYAGES","▮ SWEEPS")}</span>
+      {on("deadline_sentinel") && <button onClick={async()=>{ try{
+          const r=await api("/agents/deadlines/run",{method:"POST"});
+          toast(T(`Échéances : ${r.checked} vérifiée(s), ${r.warned} alerte(s)`,`Deadlines: ${r.checked} checked, ${r.warned} warned`)); }
+          catch(e){ toast(e.message,true);} }}
+        className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("⏳ Vérifier les échéances","⏳ Check deadlines")}</button>}
+      {on("visit_feedback") && <button onClick={async()=>{ try{
+          const r=await api("/agents/feedback/run",{method:"POST"});
+          toast(T(`Sondages : ${r.surveys_sent} envoyé(s) / ${r.visits_checked} visite(s)`,`Surveys: ${r.surveys_sent} sent / ${r.visits_checked} visits`)); }
+          catch(e){ toast(e.message,true);} }}
+        className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("📝 Sondages post-visite","📝 Post-visit surveys")}</button>}
+    </div>}
     {on && feats && !on("sequences") && <LockedCard k="sequences" feats={feats}/>}
     {on && on("open_house_qr") && <OpenHousePanel toast={toast}/>}
     {on && feats && !on("open_house_qr") && <LockedCard k="open_house_qr" feats={feats}/>}
@@ -326,10 +340,10 @@ function RadarView({toast, on, feats}) {
 // ---------------------------------------------------------- CONTACTS view --
 const FUNNEL_LABEL = { fub_import:"CRM FUB", matrix_visit:"Alertes Matrix",
   danny_channel:"Références", own_generated:"Site web", prospecting_agent:"Prospection",
-  open_house:"Porte ouverte" };
+  open_house:"Porte ouverte", seller_intel:"Vendeurs (IA)" };
 const FUNNEL_LABEL_EN = { fub_import:"FUB CRM", matrix_visit:"Matrix alerts",
   danny_channel:"Referrals", own_generated:"Website", prospecting_agent:"Prospecting",
-  open_house:"Open house" };
+  open_house:"Open house", seller_intel:"Sellers (AI)" };
 const chipCls = (on)=>"mono text-[10px] px-2.5 py-1 rounded-full border transition-colors "
   +(on?"border-[var(--amber)] amber bg-[var(--amber)]/10"
       :"border-[var(--line)] text-[var(--mute)] hover:text-[var(--ink)]");
@@ -569,14 +583,91 @@ function AgentsView({toast}) {
   const [tab,setTab]=useState("office");
   return <div className="fadein">
     <div className="flex gap-2 mb-4">
-      {[["office",T("🗂 Gestion de bureau","🗂 Office management")],["prospect",T("🎯 Prospection","🎯 Prospecting")],["content",T("📣 Contenu & social","📣 Content & social")],["voice",T("📞 Voix & relances","📞 Voice & follow-ups")]].map(([k,l])=>(
+      {[["office",T("🗂 Gestion de bureau","🗂 Office management")],["prospect",T("🎯 Prospection","🎯 Prospecting")],["seller",T("🏠 Vendeurs","🏠 Sellers")],["content",T("📣 Contenu & social","📣 Content & social")],["voice",T("📞 Voix & relances","📞 Voice & follow-ups")]].map(([k,l])=>(
         <button key={k} onClick={()=>setTab(k)}
           className={"mono text-[11px] px-3 py-1.5 rounded border "+(tab===k?"border-[var(--amber)] amber":"border-[var(--line)] text-[var(--mute)]")}>{l}</button>))}
     </div>
     {tab==="office" && <OfficePanel toast={toast}/>}
     {tab==="prospect" && <ProspectPanel toast={toast}/>}
+    {tab==="seller" && <SellerPanel toast={toast}/>}
     {tab==="content" && <ContentPanel toast={toast}/>}
     {tab==="voice" && <VoicePanel toast={toast}/>}
+  </div>;
+}
+
+function SellerPanel({toast}) {
+  const [sector,setSector]=useState("Rosemont, Montréal");
+  const [rows,setRows]=useState([]); const [market,setMarket]=useState(null);
+  const [draft,setDraft]=useState(null); const [busy,setBusy]=useState(false);
+  const load=async()=>setRows(await api("/agents/seller/prospects"));
+  useEffect(()=>{ load().catch(()=>{}); },[]);
+  const run=async()=>{ if(busy) return; setBusy(true);
+    try{ await api("/agents/seller/run",{method:"POST",
+        body:JSON.stringify({sector,count:5,provider:"stub"})});
+      setMarket(await api("/agents/seller/market/"+encodeURIComponent(sector)));
+      toast(T("5 propriétaires découverts et scorés (démo)","5 homeowners discovered and scored (demo)")); await load(); }
+    catch(e){ toast(e.message,true);} finally{ setBusy(false);} };
+  const consent=async(id,basis)=>{ if(!basis) return;
+    try{ await api(`/agents/seller/prospects/${id}/consent`,
+      {method:"POST",body:JSON.stringify({consent_basis:basis})}); await load(); }
+    catch(e){ toast(e.message,true);} };
+  const outreach=async(id,channel,send)=>{ try{
+      const d=await api(`/agents/seller/prospects/${id}/outreach`,
+        {method:"POST",body:JSON.stringify({channel,language:"fr",send:!!send})});
+      setDraft(d.draft);
+      toast(send?T(`Approche ${d.status} (${channel})`,`Outreach ${d.status} (${channel})`)
+                :T("Brouillon prêt — signal de ciblage exclu","Draft ready — targeting signal excluded"));
+      await load(); }
+    catch(e){ setDraft(null); toast(e.message,true);} };
+  const promote=async(id)=>{ try{ await api(`/agents/seller/prospects/${id}/promote`,{method:"POST"});
+      toast(T("Promu en lead vendeur — visible dans le Radar","Promoted to seller lead — visible in the Radar")); await load(); }catch(e){toast(e.message,true);} };
+  return <div className="panel p-4">
+    <div className="mono text-[11px] amber mb-2">{T("▮ INTELLIGENCE VENDEUR — qui va vendre bientôt · approche selon le marché","▮ SELLER INTELLIGENCE — who lists next · market-driven outreach")}</div>
+    <div className="flex flex-wrap items-end gap-2 mb-2">
+      <div className="flex-1 min-w-[200px]"><div className="mono text-[10px] text-[var(--mute)]">{T("SECTEUR","SECTOR")}</div>
+        <input value={sector} onChange={e=>setSector(e.target.value)}
+          className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-sm"/></div>
+      <button onClick={run} disabled={busy} className="mono text-[10px] px-3 py-2 rounded bg-[var(--amber)]/90 text-black font-semibold">{T("Découvrir & scorer","Discover & score")}</button>
+    </div>
+    {market && <div className="panel2 p-3 mb-3 mono text-[11px]">
+      <span className="amber">▮ {T("MARCHÉ","MARKET")} · {market.verdict.toUpperCase()}</span>
+      <span className="text-[var(--mute)]"> — {market.inventory_months} {T("mois d'inventaire","months of inventory")} · {market.avg_dom} {T("jours au marché","days on market")} · {market.yoy_price_pct>=0?"+":""}{market.yoy_price_pct}% {T("sur 1 an","YoY")} <span className="opacity-60">[{market.source}]</span></span>
+    </div>}
+    <div className="text-[10px] text-[var(--mute)] mb-3 mono">
+      {T("Fournisseur: stub (démo) · slot Registre foncier/JLR prêt · Pare-feu: le signal choisit QUI, jamais QUOI. Lettre/script: toujours permis · courriel/SMS: base LCAP requise · voix automatisée: consentement EXPRÈS (CRTC/ADAD).",
+         "Provider: stub (demo) · Land-registry/JLR slot ready · Firewall: the signal picks WHO, never WHAT. Letter/script: always allowed · email/SMS: CASL basis required · automated voice: EXPRESS consent (CRTC/ADAD).")}</div>
+    <div className="space-y-2">
+      {rows.map(p=>(
+        <div key={p.id} className="panel2 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mono text-lg font-semibold amber w-10 text-center">{p.sell_score}</span>
+            <span className="font-medium">{p.name}</span>
+            {p.is_demo && <span className="mono text-[9px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 border border-slate-500/40">{T("DÉMO","DEMO")}</span>}
+            <span className="mono text-[10px] text-[var(--mute)]">{p.address}</span>
+            <span className="ml-auto mono text-[10px] text-[var(--mute)]">{p.outreach_status}</span>
+          </div>
+          <div className="mono text-[10px] amber mt-1">{p.score_reasons||T("peu de signaux","few signals")}</div>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <select value={p.consent_basis||""} onChange={e=>consent(p.id,e.target.value)}
+              className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]">
+              <option value="">{T("— base LCAP/CASL —","— CASL basis —")}</option>
+              <option value="express">{T("Consentement exprès","Express consent")}</option>
+              <option value="implied_existing_business">{T("Relation d'affaires","Business relationship")}</option>
+              <option value="implied_inquiry">{T("Demande reçue","Inquiry received")}</option>
+              <option value="conspicuous_publication_b2b">{T("Publication B2B","B2B publication")}</option>
+              <option value="mail_only">{T("Courrier seulement","Mail only")}</option>
+            </select>
+            <button onClick={()=>outreach(p.id,"letter")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("📮 Lettre","📮 Letter")}</button>
+            <button onClick={()=>outreach(p.id,"call")} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)]">☎ Script</button>
+            <button onClick={()=>outreach(p.id,"email",true)} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-emerald-400">{T("✉ Courriel","✉ Email")}</button>
+            <button onClick={()=>outreach(p.id,"sms",true)} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-emerald-400">💬 SMS</button>
+            <button onClick={()=>outreach(p.id,"voice",true)} title={T("Voix clonée — consentement exprès requis","Cloned voice — express consent required")}
+              className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-emerald-400">📞 {T("Voix","Voice")}</button>
+            <button onClick={()=>promote(p.id)} className="mono text-[10px] px-2 py-1 rounded bg-[var(--amber)]/90 text-black font-semibold">→ Lead</button>
+          </div>
+        </div>))}
+    </div>
+    {draft && <pre className="panel2 p-3 mt-3 mono text-[11px] whitespace-pre-wrap max-h-60 overflow-auto">{draft}</pre>}
   </div>;
 }
 
