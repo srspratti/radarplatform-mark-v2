@@ -1,0 +1,164 @@
+/* ============================================================
+   Radar Platform — shared design tokens
+   Imported by every frontend (dashboard, vitrine, ops, acheteur).
+   Two themes:
+     :root                 -> light, "civic Québec" (dashboard, vitrine)
+     [data-theme="dark"]   -> dark petrol/amber (ops, acheteur)
+   Rule: NEVER hardcode a hex value in a component — always token.
+   ============================================================ */
+
+:root {
+  /* --- civic Québec palette (light surfaces) -------------------- */
+  --paper:      #F6F8FA;
+  --paper-2:    #FFFFFF;
+  --ink:        #0F1B2D;
+  --ink-2:      #1E293B;
+  --sub:        #475569;      /* passes AA on --paper */
+  --mute:       #64748B;
+  --faint:      #94A3B8;
+  --line:       #E2E8F0;
+  --line-2:     #CBD5E1;
+
+  --brand:      #1656B4;      /* metro blue */
+  --brand-soft: #E8EEF9;
+  --accent:     #E8A33D;      /* ochre */
+  --accent-soft:#FBF1DD;
+  --spruce:     #2F7D5C;
+  --spruce-soft:#E4F1EA;
+
+  --ok:         #047857;
+  --warn:       #D97706;
+  --danger:     #B4552E;
+  --danger-soft:#F6E3DA;
+
+  /* semantic score bands (used across dashboards) */
+  --score-hot:  #047857;
+  --score-warm: #D97706;
+  --score-cool: #94A3B8;
+
+  /* --- geometry -------------------------------------------------- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* --- elevation ------------------------------------------------- */
+  --shadow-1: 0 1px 2px rgba(15, 27, 45, 0.06);
+  --shadow-2: 0 4px 12px -4px rgba(15, 27, 45, 0.10);
+  --shadow-3: 0 12px 32px -12px rgba(15, 27, 45, 0.20);
+
+  /* --- motion ---------------------------------------------------- */
+  --dur-1: 120ms;
+  --dur-2: 240ms;
+  --dur-3: 480ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* --- type ramp (rem, not px) ----------------------------------- */
+  --fs-eyebrow: 0.6875rem;    /* 11px */
+  --fs-caption: 0.75rem;      /* 12px */
+  --fs-body-s:  0.8125rem;    /* 13px */
+  --fs-body:    0.9375rem;    /* 15px */
+  --fs-h4:      1.125rem;     /* 18px */
+  --fs-h3:      1.5rem;       /* 24px */
+  --fs-h2:      2rem;         /* 32px */
+  --fs-display: clamp(2.25rem, 5vw, 3.25rem);
+
+  --font-display: "Bricolage Grotesque", "Archivo", ui-sans-serif, sans-serif;
+  --font-body:    "Public Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+
+  /* focus ring */
+  --focus: #1656B4;
+  --focus-offset: 2px;
+}
+
+/* dark theme — used by /ops and /acheteur ------------------------- */
+[data-theme="dark"] {
+  --paper:      #06171C;   /* petrol */
+  --paper-2:    #0C2530;
+  --ink:        #D9E8EC;
+  --ink-2:      #FFFFFF;
+  --sub:        #B1CBD1;
+  --mute:       #8FB0B8;   /* bumped from #6f939d for AA */
+  --faint:      #6E9199;
+  --line:       #1B4552;
+  --line-2:     #2A5A6A;
+
+  --brand:      #F5A623;   /* on dark, ochre becomes primary CTA */
+  --brand-soft: rgba(245, 166, 35, 0.12);
+  --accent:     #1656B4;
+  --accent-soft:rgba(22, 86, 180, 0.12);
+  --spruce:     #39D98A;
+  --spruce-soft:rgba(57, 217, 138, 0.12);
+
+  --ok:         #39D98A;
+  --warn:       #F5A623;
+  --danger:     #F87171;
+  --danger-soft:rgba(248, 113, 113, 0.12);
+
+  --score-hot:  #39D98A;
+  --score-warm: #F5A623;
+  --score-cool: #5B7D87;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-2: 0 6px 16px -4px rgba(0, 0, 0, 0.42);
+  --shadow-3: 0 16px 40px -12px rgba(0, 0, 0, 0.55);
+
+  --focus: #F5A623;
+}
+
+/* --- global resets that every surface benefits from -------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+.rp-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 500;
+}
+
+.rp-tabular { font-variant-numeric: tabular-nums; }
+
+/* single, universal focus ring */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* stack-appropriate scrollbars on dark surfaces */
+[data-theme="dark"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+/* utility: subtle amber scanline overlay for ops "instrument" cards */
+.rp-scanline {
+  background: linear-gradient(180deg,
+    rgba(245, 166, 35, 0.06),
+    transparent 60%);
+}
+
+/* fade-in used across surfaces */
+.rp-fadein {
+  animation: rp-fadein var(--dur-2) var(--ease-out) both;
+}
+@keyframes rp-fadein {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
