@@ -10,6 +10,7 @@ internal/matrix-centris-rpa is deliberately NOT mounted or imported — it is
 Danny-internal tooling, excluded from the Docker image via .dockerignore.
 Its path into the hub is indirect and ToS-clean: harvester → FUB → hub import.
 """
+import logging
 import sys
 
 if sys.version_info < (3, 10):  # bare `uvicorn` often resolves to Anaconda base 3.9
@@ -34,6 +35,8 @@ from .api import router
 from .dashboard import DASHBOARD_HTML
 from . import __version__
 
+logger = logging.getLogger(__name__)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DASH_DIST = REPO_ROOT / "apps" / "dashboard" / "dist"
 VITRINE_DIST = REPO_ROOT / "apps" / "vitrine" / "dist"
@@ -47,8 +50,8 @@ async def lifespan(app: FastAPI):
         from radar_acheteur import db as ach_db
         from radar_acheteur.config import cfg as ach_cfg
         ach_db.init(ach_cfg.db_path)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 — the hub runs without the Acheteur module
+        logger.warning("Radar Acheteur DB init skipped", exc_info=True)
     yield
 
 
@@ -126,6 +129,7 @@ try:
     app.mount("/acheteur", acheteur_app)
     ACHETEUR_MOUNTED = True
 except Exception:  # noqa: BLE001 — hub must boot even without the subpackage
+    logger.warning("Radar Acheteur app not mounted at /acheteur", exc_info=True)
     ACHETEUR_MOUNTED = False
 
 
@@ -549,7 +553,8 @@ def tracked_listing_link(token: str, centris_no: str):
         from .automations import check_engagement_threshold
         check_engagement_threshold(db, contact.tenant_id, contact)
     except Exception:  # noqa: BLE001 — tracking must never break the redirect
-        pass
+        logger.warning("Tracked-link click ingestion failed for token %s",
+                       token, exc_info=True)
     finally:
         db.close()
     return RedirectResponse(dest, status_code=302)

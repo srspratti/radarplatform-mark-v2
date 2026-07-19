@@ -8,9 +8,12 @@ their HTML — so this mirror email IS the click-capture mechanism.
 Dev mode (no SMTP_HOST): sends return "simulated". Never raises.
 """
 from __future__ import annotations
+import logging
 import smtplib
 from email.message import EmailMessage
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def send_email(to: str, subject: str, html: str, text: str = "") -> str:
@@ -34,6 +37,7 @@ def send_email(to: str, subject: str, html: str, text: str = "") -> str:
             s.send_message(msg)
         return "sent"
     except Exception:  # noqa: BLE001 — mail failure must never down an intake
+        logger.warning("Email send to %s failed", to, exc_info=True)
         return "failed"
 
 

@@ -6,6 +6,7 @@
 """
 import argparse
 import time
+import traceback
 from .pipeline import run_once, send_digest
 
 
@@ -28,8 +29,9 @@ def main():
         while True:
             try:
                 run_once(with_digest=args.digest)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — one bad pass must not kill the loop
                 print(f"[radar] pass error: {e}")
+                traceback.print_exc()
             time.sleep(args.interval)
     else:
         run_once(with_digest=args.digest)

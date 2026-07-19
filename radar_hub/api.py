@@ -4,6 +4,7 @@ tenant_id is the only structural difference between internal and white-label).
 """
 from __future__ import annotations
 import json
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
@@ -28,6 +29,8 @@ from .agents import prospecting as prospect
 from .agents import content_social as content
 from .agents import voice as voice_agent
 from .agents import seller_intel as seller
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -538,6 +541,8 @@ async def voice_inbound(request: Request, format: str = "",
                     "name": form.get("CallerName", ""),
                     "transcript": form.get("TranscriptionText", "")}
         except Exception:  # noqa: BLE001
+            logger.warning("voice-inbound webhook body unparsable as JSON or "
+                           "form; treating as empty", exc_info=True)
             data = {}
     result = voice_agent.handle_missed_call(
         db, t, from_number=str(data.get("from", "")),
@@ -941,7 +946,8 @@ def geocode(q: str, db: Session = Depends(get_db)):
             if hits:
                 lat, lon = float(hits[0]["lat"]), float(hits[0]["lon"])
         except Exception:  # noqa: BLE001 — geocoding is best-effort
-            pass
+            logger.warning("Geocoding lookup failed for %r; caching as "
+                           "not-found", q, exc_info=True)
         row = GeoCache(query=q, lat=lat, lon=lon)
         db.add(row)
         db.commit()
@@ -1060,7 +1066,9 @@ def vitrine_ai(body: VitrineAIIn, db: Session = Depends(get_db)):
                                  "anthropic-version": "2023-06-01"})
             r.raise_for_status()
             return r.json()
-    except Exception:
+    except Exception:  # noqa: BLE001 — the portal keeps a deterministic fallback
+        logger.warning("Vitrine AI proxy call failed; returning fallback",
+                       exc_info=True)
         return _AI_FALLBACK
 
 

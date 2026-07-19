@@ -51,7 +51,7 @@ def _age_days(iso):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return max(0.0, (_now() - dt).total_seconds() / 86400)
-    except Exception:
+    except (TypeError, ValueError):
         return 999.0
 
 

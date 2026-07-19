@@ -11,9 +11,12 @@ Resolution order (highest wins):
   4. DEFAULT_TIER (platinum — dev mode shows everything)
 """
 from __future__ import annotations
+import logging
 import os
 import tomllib
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 TIERS = ["basic", "premium", "gold", "platinum"]
 DEFAULT_TIER = "platinum"
@@ -98,6 +101,8 @@ def _load_config() -> dict:
     except FileNotFoundError:
         return {}
     except Exception:  # noqa: BLE001 — a broken config must never down the hub
+        logger.warning("features.toml is invalid; falling back to defaults",
+                       exc_info=True)
         return {}
 
 
