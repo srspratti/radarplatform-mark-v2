@@ -2391,6 +2391,16 @@ const EXTRA_LISTINGS = [
 const HERO_VIDEOS = {
   "25995203": "https://d8j0ntlcm91z4.cloudfront.net/user_3GGcnlb30w4rwInWPmkZocDwJ0x/hf_20260709_132918_005475da-f23e-4a96-b425-8ef81c306833.mp4", // drone → orbite 360° → porte d'entrée (job 005475da…) + intérieur (365a3ee4…)
 };
+// Curated pins (BROWSE_META) only cover the demo listings; live Matrix
+// listings have no hand-placed coordinate. Derive a stable pin from the id so
+// every row renders on the map view instead of crashing on `xy[0]`.
+function pinXY(id, xy) {
+  if (Array.isArray(xy) && xy.length === 2) return xy;
+  let h = 0;
+  const s = String(id);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return [16 + (h % 68), 16 + (Math.floor(h / 68) % 64)];
+}
 function browseRows(lang) {
   const full = LISTINGS.map((l) => {
     const m = BROWSE_META[l.id] || {};
@@ -2400,12 +2410,12 @@ function browseRows(lang) {
       price: l.price, beds: l.beds, bathsStr: `${Math.floor(l.baths)}+${pr}`,
       heatStr: lang === "fr" ? HEAT[l.heating].fr : HEAT[l.heating].en,
       rooms: m.rooms, lot: m.lot, garage: /garage/i.test(l.parkFr), fire: !!m.fire, pool: /piscine/i.test(l.inclFr),
-      badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: m.xy, full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
+      badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: pinXY(l.id, m.xy), full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
       centrisUrl: l.centrisUrl || "", photos: (featOn("listing_photos") && l.photos) || [],
     };
   });
   const extra = EXTRA_LISTINGS.map((e) => ({
-    ...e, typeStr: lang === "fr" ? e.typeFr : e.typeEn, heatStr: lang === "fr" ? e.heatFr : e.heatEn, full: false, condo: false, video: HERO_VIDEOS[e.id] || null,
+    ...e, xy: pinXY(e.id, e.xy), typeStr: lang === "fr" ? e.typeFr : e.typeEn, heatStr: lang === "fr" ? e.heatFr : e.heatEn, full: false, condo: false, video: HERO_VIDEOS[e.id] || null,
   }));
   return [...extra.slice(0, 1), ...full, ...extra.slice(1)];
 }

@@ -3,7 +3,8 @@ Swap for Postgres by changing the connection in `connect()` when going multi-ten
 import sqlite3
 import json
 from contextlib import contextmanager
-from datetime import datetime, timezone
+
+from .timeutil import now_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS raw_emails (
@@ -48,10 +49,6 @@ CREATE TABLE IF NOT EXISTS scores (
     computed_at TEXT
 );
 """
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 @contextmanager

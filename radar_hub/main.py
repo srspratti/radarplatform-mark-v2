@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
+from .config import settings
 from .models import init_db
 from .api import router
 from .dashboard import DASHBOARD_HTML
@@ -56,8 +57,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Radar Hub", version=__version__, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+# Same-origin by default (frontends are served by this app). Cross-origin
+# browser clients must be allow-listed via RADAR_CORS_ORIGINS — never wildcard,
+# which would let any site drive the API from a signed-in user's browser.
+if settings.CORS_ORIGINS:
+    app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS,
+                       allow_credentials=True, allow_methods=["*"],
+                       allow_headers=["*"])
 app.include_router(router)
 
 if DASH_DIST.exists():

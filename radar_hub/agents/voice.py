@@ -28,6 +28,7 @@ scripts never quote the tracked activity back at the person.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import re
 from datetime import timedelta
@@ -168,15 +169,15 @@ def _lang(c: Contact) -> str:
 
 # --------------------------------------------------- qualification form ----
 def qual_token(contact_id: int) -> str:
-    sig = hashlib.sha256(
-        f"{contact_id}|{settings.API_KEY}|radar-qualification".encode()
-    ).hexdigest()[:10]
+    sig = hmac.new(settings.TOKEN_SECRET.encode(),
+                   f"{contact_id}|radar-qualification".encode(),
+                   hashlib.sha256).hexdigest()[:10]
     return f"{contact_id}-{sig}"
 
 
 def parse_qual_token(qid: str) -> int | None:
     m = re.fullmatch(r"(\d+)-([0-9a-f]{10})", qid or "")
-    if not m or qual_token(int(m.group(1))) != qid:
+    if not m or not hmac.compare_digest(qual_token(int(m.group(1))), qid):
         return None
     return int(m.group(1))
 
