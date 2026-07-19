@@ -3,6 +3,7 @@ Tenant: X-Tenant-Id header, defaults to Danny's instance (decision #3 —
 tenant_id is the only structural difference between internal and white-label).
 """
 from __future__ import annotations
+import hmac
 import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -33,7 +34,8 @@ router = APIRouter(prefix="/api")
 
 
 def auth(x_radar_key: str = Header(default="")) -> None:
-    if settings.API_KEY and x_radar_key != settings.API_KEY:
+    if settings.API_KEY and not hmac.compare_digest(x_radar_key,
+                                                    settings.API_KEY):
         raise HTTPException(401, "clé API invalide (X-Radar-Key)")
 
 
