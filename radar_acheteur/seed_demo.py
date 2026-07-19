@@ -5,10 +5,10 @@ with REAL computed numbers (not hardcoded). Safe to run repeatedly.
     uvicorn radar_acheteur.api:app --port 8000   # then open http://localhost:8000/
 """
 import random
-from datetime import datetime, timezone, timedelta
 from . import db
 from .config import cfg
 from .score import score_contact, tier_for
+from .timeutil import days_ago_iso
 
 random.seed(11)
 
@@ -29,10 +29,6 @@ EXTRA_PRICES = {"Mercier–H.-M.": 470_000, "Saint-Léonard": 540_000, "Le Sud-O
 TYPES = ["view", "view", "view", "favorite", "alert_match", "portal_login"]
 
 
-def _iso(days_ago, jitter_h=0):
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago, hours=jitter_h)).isoformat()
-
-
 def run():
     db.init(cfg.db_path)
     listing = 10_000_000
@@ -44,9 +40,9 @@ def run():
         no = str(listing)
         db.save_signal(c, contact_key=key, type=typ, listing_no=no,
                        listing_addr=addr, listing_price=price,
-                       occurred_at=_iso(day, random.randint(0, 20)))
+                       occurred_at=days_ago_iso(day, random.randint(0, 20)))
         activity.setdefault(key, []).append(
-            {"type": typ, "listing_no": no, "occurred_at": _iso(day)})
+            {"type": typ, "listing_no": no, "occurred_at": days_ago_iso(day)})
 
     with db.connect(cfg.db_path) as c:
         c.execute("DELETE FROM signals"); c.execute("DELETE FROM scores")
@@ -74,9 +70,9 @@ def run():
                 day = random.randint(0, 3)
                 db.save_signal(c, contact_key=key, type=typ, listing_no=no,
                                listing_addr=addr, listing_price=price,
-                               occurred_at=_iso(day))
+                               occurred_at=days_ago_iso(day))
                 activity.setdefault(key, []).append(
-                    {"type": typ, "listing_no": no, "occurred_at": _iso(day)})
+                    {"type": typ, "listing_no": no, "occurred_at": days_ago_iso(day)})
 
         for key, sigs in activity.items():
             s = score_contact(sigs, cfg.half_life_days)

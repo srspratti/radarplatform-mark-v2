@@ -2,7 +2,7 @@
 from . import db, ingest, parse, score, digest
 from .fub import FUB
 from .config import cfg
-from datetime import datetime, timedelta, timezone
+from .timeutil import days_ago_iso, now
 
 
 def _contact_key(sig) -> str:
@@ -42,7 +42,7 @@ def ingest_and_parse():
 
 
 def rescore():
-    since = (datetime.now(timezone.utc) - timedelta(days=cfg.lookback_days)).isoformat()
+    since = days_ago_iso(cfg.lookback_days)
     with db.connect(cfg.db_path) as c:
         for key in db.all_contact_keys(c, since):
             sigs = [dict(r) for r in db.signals_for(c, key, since)]
@@ -54,8 +54,8 @@ def rescore():
 def flag_hot():
     """Push newly-hot contacts to FUB with a why-now brief + same-day task."""
     fub = FUB(cfg)
-    since = (datetime.now(timezone.utc) - timedelta(days=cfg.lookback_days)).isoformat()
-    due = datetime.now(timezone.utc).replace(hour=17, minute=0, second=0).isoformat()
+    since = days_ago_iso(cfg.lookback_days)
+    due = now().replace(hour=17, minute=0, second=0).isoformat()
     with db.connect(cfg.db_path) as c:
         hot = db.newly_hot(c)
         for r in hot:

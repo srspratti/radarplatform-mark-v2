@@ -9,9 +9,10 @@ Honest scope:
 Sector demand comes from mapping each viewed listing's address to a Montréal borough.
 Price-band heat and deltas compare the last N days to the prior N days.
 """
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from . import db
-from .score import WEIGHTS
+from .score import signal_weight
+from .timeutil import now
 
 # Montréal borough / sector keyword map (extend freely).
 BOROUGHS = {
@@ -41,24 +42,6 @@ FR_MONTHS = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
              "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
 
 
-def _now():
-    return datetime.now(timezone.utc)
-
-
-def _age_days(iso):
-    try:
-        dt = datetime.fromisoformat(iso)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return max(0.0, (_now() - dt).total_seconds() / 86400)
-    except Exception:
-        return 999.0
-
-
-def _w(sig, half_life):
-    return WEIGHTS.get(sig["type"], 0.0) * (0.5 ** (_age_days(sig["occurred_at"]) / half_life))
-
-
 def _borough(addr):
     a = (addr or "").lower()
     for name, keys in BOROUGHS.items():
@@ -82,10 +65,10 @@ def _pct_delta(cur, prev):
 
 
 def compute(db_path, lookback_days=30, half_life=7):
-    now = _now()
-    cur_start = (now - timedelta(days=lookback_days)).isoformat()
-    prev_start = (now - timedelta(days=2 * lookback_days)).isoformat()
-    now_iso = now.isoformat()
+    now_dt = now()
+    cur_start = (now_dt - timedelta(days=lookback_days)).isoformat()
+    prev_start = (now_dt - timedelta(days=2 * lookback_days)).isoformat()
+    now_iso = now_dt.isoformat()
 
     with db.connect(db_path) as c:
         cur = _fetch_window(c, cur_start, now_iso)
@@ -112,7 +95,7 @@ def compute(db_path, lookback_days=30, half_life=7):
         for s in rows:
             b = _borough(s.get("listing_addr"))
             if b:
-                wt[b] = wt.get(b, 0) + _w(s, half_life)
+                wt[b] = wt.get(b, 0) + signal_weight(s, half_life)
                 ct[b] = ct.get(b, 0) + 1
         return wt, ct
 
@@ -174,7 +157,7 @@ def compute(db_path, lookback_days=30, half_life=7):
                              f"— marqués dans Follow Up Boss."})
 
     return {
-        "period": f"{FR_MONTHS[now.month]} {now.year}",
+        "period": f"{FR_MONTHS[now_dt.month]} {now_dt.year}",
         "scope": "broker",
         "readouts": readouts,
         "sectors": sectors,
