@@ -16,6 +16,7 @@ System pings are ingested with actor="system" and reproject=False: they can
 never feed the client's own engagement score or self-trigger loops.
 """
 from __future__ import annotations
+import logging
 import urllib.parse
 from datetime import timedelta
 from sqlalchemy.orm import Session
@@ -23,6 +24,8 @@ from . import features
 from .config import settings
 from .models import (Contact, ConsentRecord, FollowUp, NotificationItem,
                      OutboundMessage, utcnow)
+
+logger = logging.getLogger(__name__)
 
 
 def notify(db: Session, t: str, kind: str, title: str, body: str = "",
@@ -49,7 +52,12 @@ def queue_msg(db: Session, t: str, c: Contact, channel: str, body: str,
         try:
             sms.dispatch(db, m)
         except Exception:  # noqa: BLE001 — transport must not break callers
-            pass
+            # dispatch is documented to never raise; if it somehow does, mark the
+            # message failed instead of leaving it stuck "pending" and invisible.
+            logger.warning("Immediate dispatch of message %s failed", m.id,
+                           exc_info=True)
+            m.status = "failed"
+            db.commit()
     if m.status == "simulated" and channel in ("sms", "whatsapp") and c.phone:
         tap = (f"sms:{sms.normalize_phone(c.phone)}?&body="
                + urllib.parse.quote(body))

@@ -11,12 +11,15 @@ unknown person is created directly as a client (same rule as the hub's own
 new_client_alert path).
 """
 from __future__ import annotations
+import logging
 import os
 import sqlite3
 from datetime import datetime
 from sqlalchemy.orm import Session
 from ..models import Contact, utcnow
 from ..events import ingest_event
+
+logger = logging.getLogger(__name__)
 
 SIGNAL_MAP = {
     "view": ("listing.viewed", "client", True),
@@ -32,7 +35,9 @@ def _acheteur_db_path() -> str:
     try:
         from radar_acheteur.config import cfg
         return cfg.db_path
-    except Exception:
+    except Exception:  # noqa: BLE001 — subpackage may be absent (marketable split)
+        logger.debug("radar_acheteur.config unavailable; using DB_PATH env",
+                     exc_info=True)
         return os.getenv("DB_PATH", "radar_acheteur.db")
 
 
@@ -95,8 +100,11 @@ def sync_from_acheteur(db: Session, tenant_id: str,
             for k in (r["email"], r["phone"], r["full_name"]):
                 if k:
                     directory[str(k).strip().lower()] = dict(r)
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        # No contacts table yet — sync still proceeds on signals alone, but the
+        # absence must be observable rather than silently swallowed.
+        logger.warning("Radar Acheteur contacts table unavailable (%s): "
+                       "syncing signals without a contact directory", exc)
     rows = con.execute(
         "SELECT id, contact_key, type, listing_no, listing_addr, occurred_at "
         "FROM signals ORDER BY id ASC LIMIT ?", (limit,)).fetchall()

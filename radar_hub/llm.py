@@ -4,8 +4,11 @@ Uses prompt caching on system blocks to keep Haiku fallback costs near zero.
 """
 from __future__ import annotations
 import json
+import logging
 import httpx
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 _API = "https://api.anthropic.com/v1/messages"
 
@@ -33,7 +36,9 @@ def complete(prompt: str, system: str = "", max_tokens: int = 600,
             data = r.json()
             return "".join(b.get("text", "") for b in data.get("content", [])
                            if b.get("type") == "text").strip()
-    except Exception:
+    except Exception:  # noqa: BLE001 — every caller has a deterministic fallback
+        logger.warning("Anthropic completion failed; falling back",
+                       exc_info=True)
         return None
 
 
@@ -44,7 +49,8 @@ def complete_json(prompt: str, system: str = "", max_tokens: int = 600) -> dict 
         return None
     try:
         return json.loads(text.replace("```json", "").replace("```", "").strip())
-    except Exception:
+    except json.JSONDecodeError:
+        logger.warning("Anthropic JSON parse failed for output: %s", text[:200])
         return None
 
 
@@ -59,5 +65,7 @@ def classify_lead_intent(notes: str) -> int:
         return 0
     try:
         return max(-15, min(15, int(out.get("adjust", 0))))
-    except Exception:
+    except (TypeError, ValueError):
+        logger.warning("Unexpected 'adjust' value in intent output: %r",
+                       out.get("adjust"))
         return 0

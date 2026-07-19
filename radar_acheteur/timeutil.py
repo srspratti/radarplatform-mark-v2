@@ -28,7 +28,7 @@ def age_days(iso: str, on_error: float = 0.0) -> float:
         dt = datetime.fromisoformat(iso)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-    except Exception:
+    except (TypeError, ValueError):
         return on_error
     return max(0.0, (now() - dt).total_seconds() / 86400)
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
 from datetime import timedelta
 from xml.sax.saxutils import escape
@@ -42,6 +43,8 @@ from ..connectors.sms import normalize_phone
 from ..events import ingest_event
 from ..models import (ConsentRecord, Contact, FollowUp, OutboundMessage,
                       utcnow)
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------- provider ----
@@ -87,8 +90,13 @@ def synthesize_speech(text: str) -> bytes | None:
             json={"text": text[:2500],
                   "model_id": "eleven_multilingual_v2"},
             timeout=30)
-        return r.content if r.status_code == 200 else None
+        if r.status_code != 200:
+            logger.warning("ElevenLabs synthesis failed: %s %s",
+                           r.status_code, r.text[:200])
+            return None
+        return r.content
     except Exception:  # noqa: BLE001 — synthesis must never break a call flow
+        logger.warning("ElevenLabs synthesis transport error", exc_info=True)
         return None
 
 
@@ -108,8 +116,12 @@ def place_voice_call(to: str, twiml: str) -> tuple[str, str]:
             auth=(settings.TWILIO_SID, settings.TWILIO_TOKEN), timeout=10)
         if r.status_code == 201:
             return "sent", r.json().get("sid", "")
+        logger.warning("Twilio voice call failed: %s %s", r.status_code,
+                       r.text[:200])
         return "failed", f"twilio {r.status_code}: {r.text[:120]}"
     except Exception as exc:  # noqa: BLE001
+        logger.warning("Twilio voice call transport error to %s: %s", to, exc,
+                       exc_info=True)
         return "failed", str(exc)[:120]
 
 

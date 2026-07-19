@@ -6,10 +6,13 @@ fallback the realtor can fire from their own phone. Nothing here ever raises
 into a webhook or intake pipeline — failures become status "failed".
 """
 from __future__ import annotations
+import logging
 import re
 from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import OutboundMessage, utcnow
+
+logger = logging.getLogger(__name__)
 
 _TWILIO_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 
@@ -46,8 +49,12 @@ def send_sms(to: str, body: str, whatsapp: bool = False) -> tuple[str, str]:
                        timeout=10)
         if r.status_code == 201:
             return "sent", r.json().get("sid", "")
+        logger.warning("Twilio SMS send failed: %s %s", r.status_code,
+                       r.text[:200])
         return "failed", f"twilio {r.status_code}: {r.text[:120]}"
     except Exception as exc:  # noqa: BLE001 — transport errors must not propagate
+        logger.warning("Twilio SMS transport error to %s: %s", to, exc,
+                       exc_info=True)
         return "failed", str(exc)[:120]
 
 
