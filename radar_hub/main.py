@@ -37,6 +37,7 @@ from . import __version__
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DASH_DIST = REPO_ROOT / "apps" / "dashboard" / "dist"
 VITRINE_DIST = REPO_ROOT / "apps" / "vitrine" / "dist"
+OPS_DIST = REPO_ROOT / "apps" / "ops" / "dist"
 PWA_DIR = Path(__file__).resolve().parent / "static" / "pwa"
 
 
@@ -63,6 +64,9 @@ if DASH_DIST.exists():
 if VITRINE_DIST.exists():
     app.mount("/static/vitrine", StaticFiles(directory=VITRINE_DIST),
               name="vitrine-static")
+if OPS_DIST.exists():
+    app.mount("/static/ops", StaticFiles(directory=OPS_DIST),
+              name="ops-static")
 if PWA_DIR.exists():
     app.mount("/static/pwa", StaticFiles(directory=PWA_DIR), name="pwa-static")
 
@@ -557,7 +561,13 @@ def tracked_listing_link(token: str, centris_no: str):
 
 @app.get("/ops", response_class=HTMLResponse, include_in_schema=False)
 def ops_console() -> str:
-    # The ops console (RADAR leads inbox / CLIENTS / AGENTS + writebacks). It is
-    # a self-contained single-file React page — the CDN versions are pinned in
-    # dashboard.py (esp. Babel 7.x) so the in-browser JSX transform works.
+    # The ops console (RADAR leads inbox / CLIENTS / AGENTS + writebacks).
+    # Since Phase 1 the JSX is compiled ahead-of-time by esbuild into
+    # apps/ops/dist and served from /static/ops. If that bundle isn't built
+    # yet (fresh checkout, no `./build_frontend.sh`), we fall back to the
+    # legacy in-browser Babel path from dashboard.py so the console keeps
+    # working. Delete DASHBOARD_HTML once the bundle is universally built.
+    ops_html = OPS_DIST / "index.html"
+    if ops_html.exists():
+        return ops_html.read_text(encoding="utf-8")
     return DASHBOARD_HTML
