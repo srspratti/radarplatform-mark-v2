@@ -97,6 +97,10 @@ sed -i.bak "s/REPLACE_WITH_CLIENT_INTAKE_EMAIL/<paste-her-address>/" samples/mat
 | `MATRIX_IMAP_HOST/USER/PASS` | Hub's IMAP poll of the alerts inbox | Gmail: enable 2FA → Security → **App passwords** → Mail. Host `imap.gmail.com` |
 | `INTAKE_EMAIL_MODE/USER/DOMAIN` | Shape of per-client intake addresses | `plus` + the same Gmail user (default) — or `alias` + a catch-all domain |
 | `VITRINE_WEBHOOK_SECRET` | HMAC on portal webhooks | `openssl rand -hex 24` (same-origin deploys work without it; set it anyway) |
+| `TWILIO_SID/TOKEN/FROM` | Real SMS + AI voice-agent calls (unset = everything queues "simulated") | twilio.com → Console → Account SID / Auth token; buy a local (514/438) number |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | The broker's **cloned voice** on AI calls (unset = Twilio `<Say>` fr-CA/en-CA) | elevenlabs.io → Profile → API key; clone the voice (~1 min of clean audio) → copy its Voice ID |
+| `SMTP_HOST/PORT/USER/PASS/FROM` | Outbound email (tracked alert mirror, seller outreach) | Gmail App password works (same technique as IMAP) |
+| `RADAR_PUBLIC_URL` | Public origin used in tracked links `/l/…`, qualification form `/q/…`, feedback survey `/fb/…`, and TwiML audio URLs | `https://<app>.fly.dev` (or your custom domain) |
 | `DB_PATH` | Radar Acheteur sqlite **[Marketable]** | a path on the persistent volume |
 | `IMAP_HOST/USER/PASS`, `ALERT_SENDERS` | Acheteur module's own inbox settings **[Marketable]** | same Gmail app-password technique |
 | `RADAR_TENANT_ID` | Instance identity (white-label = new value) | choose per deployment |
@@ -150,7 +154,29 @@ Set `DB_PATH` + the module's `IMAP_*`/`ALERT_SENDERS`. Its pipeline fills its
 own DB; the intelligence UI lives at `/acheteur`. Mirror its signals into the
 unified timeline with `POST /api/connectors/acheteur/sync` (schedule it, §7).
 
-### 5.6 RPA suite **[Internal]** — Danny's account only
+### 5.6 AI voice agents + receptionist (Twilio / ElevenLabs)
+1. Set `TWILIO_SID/TOKEN/FROM`. Without them everything still works in
+   **simulated** mode: queued messages/calls appear in `/ops` → 🤖 Agents →
+   📞 with a tap-to-send fallback — perfect for testing.
+2. For the broker's cloned voice, set `ELEVENLABS_API_KEY` +
+   `ELEVENLABS_VOICE_ID`; TwiML then `<Play>`s hub-synthesized audio from
+   `/api/voice/audio/{id}.mp3` (requires a public `RADAR_PUBLIC_URL`).
+3. **Receptionist**: in the Twilio console, point your number's
+   "a call comes in / missed-call" webhook at
+   `https://<app>/api/webhooks/voice-inbound?format=twiml` — callers get the
+   bilingual greeting (FR québécois then EN), voicemail is transcribed back,
+   the apology SMS goes out, and a callback task lands in `/ops`.
+4. Thresholds, scripts, and greetings live in `features.toml [settings]`
+   (`voice_*`, `receptionist_*`, `broker_name`).
+
+### 5.7 Seller Intelligence
+Works out of the box with the demo provider (`/ops` → 🤖 Agents → 🏠).
+Real data = wire the `RegistreProvider` slot (Registre foncier / JLR).
+Compliance gates are enforced in code: letters/call scripts always allowed,
+email/SMS need a recorded CASL basis, automated voice needs **express**
+consent (CRTC ADAD).
+
+### 5.8 RPA suite **[Internal]** — Danny's account only
 ```bash
 pip install -r internal/matrix-centris-rpa/requirements.txt
 playwright install chromium
@@ -201,6 +227,10 @@ Any cron (server, GitHub Actions, or a tiny Fly machine) hitting:
 */15 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/flush-writebacks
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/import
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Marketable]
+0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
+0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback
+0 11 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/checkins/run  # ai_client_checkin
+0 */2 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/outreach/run  # ai_voice_outreach
 ```
 
 **[Internal]** the RPA writer runs from Danny's machine on demand or a gentle
