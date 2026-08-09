@@ -341,6 +341,25 @@ def process_raw_email(db: Session, tenant_id: str, raw: str,
             except ValueError:
                 continue
         pdf_rows = len(cards)
+    if not cards and contact:
+        # Matrix « Email PDF » sends a LINK to the PDF, not an attachment.
+        # Opt-in (matrix_pdf_link_fetch in features.toml): fetch the linked
+        # document once, as the email's intended recipient would.
+        from .. import features
+        if features.setting("matrix_pdf_link_fetch", False):
+            from .matrix_pdf import fetch_pdf_link, parse_matrix_pdf
+            urls = [u.rstrip(".,)>") for u in
+                    re.findall(r"https?://[^\s\"<>\]]+", raw)
+                    if "pdf" in u.lower() or "getmedia" in u.lower()
+                    or "document" in u.lower()]
+            for url in urls[:3]:
+                blob = fetch_pdf_link(url)
+                if blob:
+                    try:
+                        cards.extend(parse_matrix_pdf(blob))
+                    except ValueError:
+                        continue
+            pdf_rows = len(cards)
     parsed = parse_matrix_email(raw)
     out: dict = {"routed_by_intake": bool(contact),
                  "pdf_listings": pdf_rows,

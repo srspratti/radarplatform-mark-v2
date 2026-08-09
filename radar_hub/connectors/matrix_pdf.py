@@ -89,3 +89,18 @@ def parse_matrix_pdf_text(text: str) -> list[dict]:
 
 def parse_matrix_pdf(data: bytes) -> list[dict]:
     return parse_matrix_pdf_text(extract_pdf_text(data))
+
+
+def fetch_pdf_link(url: str, max_bytes: int = 20_000_000) -> bytes | None:
+    """One GET of a PDF link found in an email addressed to the intake inbox
+    (Matrix « Email PDF » sends a link, not an attachment). The hub acts as
+    the email's intended recipient — no login, no crawling, one document.
+    Returns None unless the response really is a PDF."""
+    try:
+        import httpx
+        r = httpx.get(url, follow_redirects=True, timeout=15)
+        if r.status_code != 200 or len(r.content) > max_bytes:
+            return None
+        return r.content if r.content[:5] == b"%PDF-" else None
+    except Exception:  # noqa: BLE001 — best-effort, the email path continues
+        return None

@@ -93,6 +93,35 @@ def test_ingest_pdf_rejects_garbage(client):
     assert r.status_code == 422
 
 
+def test_email_pdf_link_fetch_opt_in(client, db, monkeypatch):
+    """Matrix 'Email PDF' sends a LINK — with the opt-in on, the hub fetches
+    the linked document as the email's intended recipient."""
+    from radar_hub import features
+    from radar_hub.connectors import matrix_pdf
+    from radar_hub.connectors.matrix_email import process_raw_email
+    from radar_hub.models import Contact
+    lead = client.post("/api/leads", json={
+        "name": "Link Client", "phone": "514 555 0172",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    intake = db.get(Contact, c["id"]).intake_email
+    raw = (f"To: {intake}\nSubject: Vos inscriptions\n\n"
+           "here are the new listings\n"
+           "https://matrix.centris.ca/Matrix/GetMedia/results.pdf\n")
+    # off by default → nothing fetched
+    out = process_raw_email(db, T, raw, raw_id="lnk-0")
+    assert out["pdf_listings"] == 0
+    # opt-in on + stubbed fetcher (no network in tests)
+    orig = features.setting
+    monkeypatch.setattr(features, "setting", lambda k, d=None:
+                        True if k == "matrix_pdf_link_fetch" else orig(k, d))
+    monkeypatch.setattr(matrix_pdf, "fetch_pdf_link",
+                        lambda url, max_bytes=0: _mini_pdf(SAMPLE_TEXT))
+    out = process_raw_email(db, T, raw, raw_id="lnk-1")
+    assert out["routed_by_intake"] and out["pdf_listings"] == 3
+    assert out["listings_new"] == 3
+
+
 def test_email_with_pdf_attachment_routes_to_client(client, db):
     """Matrix 'Email PDF' sent to the client's intake address → Vitrine."""
     from radar_hub.connectors.matrix_email import process_raw_email

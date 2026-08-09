@@ -88,6 +88,15 @@ feedback_window_days = 3    # visites complétées des N derniers jours
 # --- Sentinelle d'échéances (deadline_sentinel) --------------------------------
 deadline_warn_days = 3      # alerte N jours avant l'échéance
 
+# --- Courriels Matrix « lien seulement » ---------------------------------------
+# Le bouton « Envoyer PDF » de Matrix envoie un LIEN vers le PDF, pas une pièce
+# jointe. true = quand un courriel routé vers une adresse d'admission n'a ni
+# inscriptions ni pièce jointe, le hub récupère UNE FOIS le document lié (aucune
+# connexion — le lien s'ouvre sans session, le hub est le destinataire voulu du
+# courriel). Zone d'appréciation : c'est une récupération programmatique depuis
+# les serveurs de Matrix — désactivé par défaut, à vous de trancher.
+matrix_pdf_link_fetch = false
+
 # --- Intelligence vendeur (seller_intelligence) --------------------------------
 # Fournisseur stub (démo) · slot Registre foncier / JLR prêt. Canaux :
 # lettre/script toujours permis; courriel/SMS avec base LCAP; voix automatisée
