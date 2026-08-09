@@ -296,10 +296,44 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
         raise HTTPException(404, "contact introuvable")
     if len(body.content_b64) > 27_000_000:  # ~20 MB decoded
         raise HTTPException(422, "PDF trop lourd (max ~20 Mo)")
+    raw = _b64.b64decode(body.content_b64)
     try:
-        cards = matrix_pdf.parse_matrix_pdf(_b64.b64decode(body.content_b64))
+        text = matrix_pdf.extract_pdf_text(raw)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    # Client Detailed export → ENRICHMENT: year/areas/taxes/rooms/remarks into
+    # Listing.details, album photos into listing_photos.
+    if matrix_pdf.is_detailed_pdf(text):
+        items = matrix_pdf.parse_detailed_pdf(raw)
+        created = photos_added = 0
+        for item in items:
+            no = item["centris_no"]
+            row = (db.query(Listing)
+                   .filter_by(tenant_id=t, contact_id=c.id, centris_no=no)
+                   .first())
+            if not row:
+                row = Listing(tenant_id=t, contact_id=c.id, centris_no=no,
+                              address=item.get("address", ""))
+                db.add(row)
+                created += 1
+            det = dict(row.details or {})
+            det.update({k: v for k, v in item.items()
+                        if k not in ("centris_no", "photos") and v})
+            row.details = det
+            db.commit()
+            if item["photos"] and features.enabled("listing_photos"):
+                if not (db.query(ListingPhoto)
+                        .filter_by(tenant_id=t, centris_no=no).first()):
+                    for i2, blob in enumerate(item["photos"]):
+                        db.add(ListingPhoto(tenant_id=t, centris_no=no,
+                                            mime="image/jpeg", sort=i2,
+                                            content=_b64.b64encode(blob).decode()))
+                        photos_added += 1
+                    db.commit()
+        return {"mode": "detailed", "parsed_rows": len(items),
+                "enriched": [i["centris_no"] for i in items],
+                "listings_new": created, "photos_added": photos_added}
+    cards = matrix_pdf.parse_matrix_pdf_text(text)
     if not cards:
         raise HTTPException(422,
                             "Aucune inscription reconnue dans ce PDF — "
@@ -1148,6 +1182,7 @@ def vitrine_listings(token: str, db: Session = Depends(get_db)):
     return [{"centris_no": r.centris_no, "address": r.address, "area": r.area,
              "price": r.price, "beds": r.beds, "baths": r.baths,
              "prop_type": r.prop_type, "url": r.url,
+             "details": r.details or {},
              "received_at": r.received_at.isoformat()} for r in rows]
 
 

@@ -569,15 +569,18 @@ function ContactsView({toast, on, feats}) {
                 rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
               try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
                   body:JSON.stringify({contact_id:sel.id, content_b64:b64, filename:f.name})});
-                toast(T(`${r.parsed_rows} ligne(s) lues — ${r.listings_new} nouvelle(s) inscription(s), ${r.listings_dup} déjà connue(s)`,
-                        `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`)); }
+                toast(r.mode==="detailed"
+                  ? T(`${r.parsed_rows} fiche(s) enrichie(s) — année, pièces, taxes, description · ${r.photos_added} photo(s) importée(s)`,
+                      `${r.parsed_rows} sheet(s) enriched — year, rooms, taxes, description · ${r.photos_added} photo(s) imported`)
+                  : T(`${r.parsed_rows} ligne(s) lues — ${r.listings_new} nouvelle(s) inscription(s), ${r.listings_dup} déjà connue(s)`,
+                      `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`)); }
               catch(err){ toast(err.message,true); }
               e.target.value="";
             }}/>
           </label>
           <div className="mono text-[10px] text-[var(--mute)] mt-2">
-            {T("Dans Matrix : ouvrir les résultats de l'auto-courriel → Sélectionner tout → Imprimer/Envoyer PDF (format détaillé, ex. my:Partial) → déposer ici. Les inscriptions apparaissent dans la Vitrine du client. Aussi automatique : envoyer ce PDF par courriel à l'adresse d'admission du client.",
-               "In Matrix: open the auto-email results → Select all → Print/Email PDF (detailed format, e.g. my:Partial) → drop it here. Listings appear in the client's Vitrine. Also automatic: email that PDF to the client's intake address.")}
+            {T("Dans Matrix : résultats → Sélectionner tout → Imprimer PDF. Grille (my:Partial) = crée les inscriptions · « Client Detailed with Photo Album » = les ENRICHIT (année, pièces → plan 3D, taxes, description, photos). Aussi automatique : envoyer le PDF par courriel à l'adresse d'admission du client.",
+               "In Matrix: results → Select all → Print PDF. Grid (my:Partial) = creates the listings · 'Client Detailed with Photo Album' = ENRICHES them (year, rooms → 3D plan, taxes, description, photos). Also automatic: email the PDF to the client's intake address.")}
           </div>
         </div>
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}

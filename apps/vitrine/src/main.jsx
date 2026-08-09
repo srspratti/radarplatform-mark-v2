@@ -193,6 +193,9 @@ function buildMerge(live, photos) {
     return live.map((r, i) => {
       const tpl = demos[i % demos.length];
       const priceRatio = r.price && tpl.price ? r.price / tpl.price : 1;
+      // enrichment from a Client Detailed PDF export (Listing.details)
+      const det = r.details || {};
+      const rooms = det.rooms || [];
       return {
         ...tpl,
         photos: (photos && photos[r.centris_no]) || [],
@@ -205,7 +208,20 @@ function buildMerge(live, photos) {
         baths: r.baths || tpl.baths,
         typeFr: r.prop_type || tpl.typeFr,
         typeEn: r.prop_type || tpl.typeEn,
-        taxesMun: Math.round((tpl.taxesMun || 3000) * priceRatio),
+        sqft: det.living_sqft || tpl.sqft,
+        year: det.year || tpl.year,
+        taxesMun: det.taxes_mun || Math.round((tpl.taxesMun || 3000) * priceRatio),
+        taxesScol: det.taxes_school || tpl.taxesScol,
+        remarks: det.remarks || "",
+        // real room dimensions (ft → m) feed the 3D plan generator
+        ficheRooms: rooms.map((rm) => ({
+          name: rm.name,
+          w: Math.round(rm.w_ft * 0.3048 * 10) / 10,
+          d: Math.round(rm.d_ft * 0.3048 * 10) / 10,
+        })),
+        sqftReal: !!det.living_sqft,
+        yearReal: !!det.year,
+        enriched: !!(det.year || det.living_sqft || rooms.length),
         centrisUrl: r.url || "",
         isLive: true,
       };

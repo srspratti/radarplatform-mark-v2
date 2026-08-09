@@ -76,6 +76,9 @@ class Listing(Base):
     baths: Mapped[int] = mapped_column(Integer, default=0)
     prop_type: Mapped[str] = mapped_column(String(120), default="")
     url: Mapped[str] = mapped_column(String(500), default="")
+    # Enrichment from a Client Detailed PDF export: year, living/lot area,
+    # taxes, room dimensions, remarks — everything the alert grid lacks.
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     __table_args__ = (UniqueConstraint("tenant_id", "contact_id", "centris_no",
                                        name="uq_listing_per_client"),)
@@ -316,6 +319,9 @@ def _migrate_contacts() -> None:
         added.append("ALTER TABLE contacts ADD COLUMN funnel VARCHAR(40) DEFAULT ''")
     if "campaign" not in cols:
         added.append("ALTER TABLE contacts ADD COLUMN campaign VARCHAR(120) DEFAULT ''")
+    lcols = {c["name"] for c in inspect(engine).get_columns("listings")}
+    if "details" not in lcols:
+        added.append("ALTER TABLE listings ADD COLUMN details JSON")
     with engine.begin() as conn:
         for stmt in added:
             conn.execute(text(stmt))

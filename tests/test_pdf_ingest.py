@@ -23,7 +23,7 @@ Emailed
 def _mini_pdf(text: str) -> bytes:
     """Smallest valid single-page PDF carrying `text` (one Tj per line) —
     enough for pypdf.extract_text to round-trip the parser input."""
-    lines = [ln.replace("(", "[").replace(")", "]")
+    lines = [ln.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
              for ln in text.splitlines() if ln.strip()]
     stream = "BT /F1 9 Tf 20 760 Td " + " ".join(
         f"({ln}) Tj 0 -12 Td" for ln in lines) + " ET"
@@ -91,6 +91,73 @@ def test_ingest_pdf_endpoint_populates_vitrine(client, db):
     assert {x["centris_no"] for x in rows} == {"17004507", "12149325",
                                               "24256061"}
     assert db.query(Listing).filter_by(contact_id=c["id"]).count() == 3
+
+
+# Condensed from a real "Client Detailed with Photo Album" export
+DETAILED_TEXT = """LES IMMEUBLES TEST INC.
+17004507 (Active)Centris No.
+143-145 Allee du 15e
+Property Type Two or more storey Year Built
+2010
+Building Type Detached
+Building Size
+Living Area
+Lot Size
+4,099.97 sqft
+2,014.03 sqft
+50,491.33 sqftLot Area
+Taxes (annual)
+$3,311 (2026)Municipal
+$143 (2026)School
+Level Room Size Floor Covering Additional Information
+GF Living room Fireplace-Stove. Stone fireplaceWood23.1 X 18 ft irr
+GF Kitchen Wood15 X 14 ft
+GF Primary bedroom Wood22 X 19.6 ft irr
+Remarks
+LA PERLE DES MONTAGNES - Tastefully decorated cottage nestled in the heart
+of the golf course, with lake views, cathedral ceilings and five bedrooms.
+Centris No. 17004507 - Page 1 of 2
+"""
+
+
+def test_parse_detailed_export_enrichment_fields():
+    from radar_hub.connectors.matrix_pdf import parse_detailed_pdf
+    items = parse_detailed_pdf(_mini_pdf(DETAILED_TEXT))
+    assert len(items) == 1
+    d = items[0]
+    assert d["centris_no"] == "17004507"
+    assert d["year"] == 2010
+    assert d["living_sqft"] == 2014 and d["lot_sqft"] == 50491
+    assert d["taxes_mun"] == 3311 and d["taxes_school"] == 143
+    assert d["address"] == "143-145 Allee du 15e"
+    assert "PERLE DES MONTAGNES" in d["remarks"]
+    names = [(r["name"], r["w_ft"], r["d_ft"]) for r in d["rooms"]]
+    assert ("Living room", 23.1, 18.0) in names
+    assert ("Primary bedroom", 22.0, 19.6) in names
+    assert d["photos"] == []  # test PDF carries no album pages
+
+
+def test_ingest_detailed_pdf_enriches_listing(client, db):
+    lead = client.post("/api/leads", json={
+        "name": "Enrich Client", "phone": "514 555 0180",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    # grid first (creates the listing), then detailed (enriches it)
+    grid = base64.b64encode(_mini_pdf(SAMPLE_TEXT)).decode()
+    client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": grid})
+    det = base64.b64encode(_mini_pdf(DETAILED_TEXT)).decode()
+    r = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": det}).json()
+    assert r["mode"] == "detailed" and r["enriched"] == ["17004507"]
+    assert r["listings_new"] == 0  # already existed from the grid
+    rows = client.get(f"/api/vitrine/listings/{c['portal_token']}").json()
+    by_no = {x["centris_no"]: x for x in rows}
+    d = by_no["17004507"]["details"]
+    assert d["year"] == 2010 and d["taxes_mun"] == 3311
+    assert len(d["rooms"]) == 3 and "PERLE" in d["remarks"]
+    # grid data untouched
+    assert by_no["17004507"]["price"] == 28000
 
 
 def test_ingest_pdf_rejects_garbage(client):

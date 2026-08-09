@@ -278,8 +278,12 @@ const DEMO_LISTINGS = [
 ];
 // [radar-platform] live-listings hook: the bridge supplies __VITRINE_MERGE__ to blend
 // Matrix-parsed listings with these demo templates. No bridge -> pure demo.
-const LISTINGS = (typeof window !== "undefined" && window.__VITRINE_MERGE__)
-  ? window.__VITRINE_MERGE__(DEMO_LISTINGS) : DEMO_LISTINGS;
+const LISTINGS = ((typeof window !== "undefined" && window.__VITRINE_MERGE__)
+  ? window.__VITRINE_MERGE__(DEMO_LISTINGS) : DEMO_LISTINGS)
+  // enriched listings carry real room dimensions (Client Detailed PDF) —
+  // the 3D dollhouse is generated from them instead of the demo template
+  .map((l) => (l.ficheRooms && l.ficheRooms.length >= 3
+    ? { ...l, plan: layoutPlan(l.ficheRooms) } : l));
 
 // [radar-platform] patch (i): plan-resolved portal capabilities — the bridge
 // fetches /api/vitrine/features per token. No bridge (pure demo) → everything
@@ -1701,9 +1705,9 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
         <div className="flex flex-wrap gap-1.5 mt-2.5">
           <Pill tone="blue">{lang === "fr" ? l.typeFr : l.typeEn}</Pill><Pill>{l.beds} {t("ch.", "bd")} · {l.baths} {t("sdb", "ba")}</Pill>
           {/* sqft/year come from the demo template — only shown when real */}
-          {!l.isLive && <Pill>{fmtN(l.sqft, lang)} pi²</Pill>}{!l.isLive && <Pill>{l.year}</Pill>}
+          {(!l.isLive || l.sqftReal) && <Pill>{fmtN(l.sqft, lang)} pi²</Pill>}{(!l.isLive || l.yearReal) && <Pill>{l.year}</Pill>}
         </div>
-        {l.isLive && (
+        {l.isLive && !l.enriched && (
           <div className="mt-3 rounded-xl p-3 flex items-start gap-2" style={{ background: C.ochreSoft, border: "1px solid #EBD3A0", fontSize: 12, color: C.ink, lineHeight: 1.5 }}>
             <AlertTriangle size={14} style={{ color: "#8A5A12", marginTop: 2, flexShrink: 0 }} />
             {t("Fiche en cours d'enrichissement — prix, adresse et pièces proviennent de votre alerte Centris; les analyses ci-dessous (coûts, quartier, prévisions) sont des estimations génériques. La fiche Centris officielle fait foi.",
@@ -1750,6 +1754,12 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
       <div className="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start">
         <div ref={refs.tour} className="lg:col-span-2"><HouseTour3D listing={l} lang={lang} onEvent={log} theme={theme} onThemeChange={(k) => { setTheme(k); log("theme_change", { theme: k }); }} onDesigner={() => refs.design.current?.scrollIntoView({ behavior: "smooth", block: "start" })} /></div>
         <div className="lg:col-span-2"><DesignSection lang={lang} log={log} theme={theme} setTheme={setTheme} refEl={refs.design} /></div>
+        {l.remarks && (
+          <section className="rounded-2xl p-4 sm:p-5 lg:col-span-2" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+            <SectionHead icon={FileText} title={t("Description de la fiche", "Listing description")} note={t("texte du courtier inscripteur", "listing broker's text")} />
+            <p style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.65, margin: 0, whiteSpace: "pre-wrap" }}>{l.remarks}</p>
+          </section>
+        )}
         <CostSection l={l} lang={lang} log={log} refEl={refs.cout} />
         {featOn("mortgage_handoff") && <MortgageCTA lang={lang} log={log} />}
         <ForecastSection l={l} lang={lang} log={log} refEl={refs.prev} />

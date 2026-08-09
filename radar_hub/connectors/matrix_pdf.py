@@ -104,6 +104,108 @@ def parse_matrix_pdf(data: bytes) -> list[dict]:
     return parse_matrix_pdf_text(extract_pdf_text(data))
 
 
+# ---------------------------------------------------------------------------
+# Client Detailed (with Photo Album) — the ENRICHMENT format. Each listing
+# spans consecutive pages carrying a "Centris No. X - Page N of M" footer:
+# header facts (year, areas, taxes), a room-dimension table, remarks, and
+# album pages of photos. Validated against a real Imperial export.
+# ---------------------------------------------------------------------------
+_RX_DET_FOOTER = re.compile(r"Centris No\.?\s*(\d{7,8})\s*-\s*Page\s*\d+")
+_RX_DET_YEAR = re.compile(r"Year Built[\s\S]{0,160}?\b((?:18|19|20)\d{2})\b")
+_RX_DET_LOT = re.compile(r"([\d,]+(?:\.\d+)?)\s*sq(?:ft|m)\s*Lot Area")
+_RX_DET_SQFT = re.compile(r"([\d,]+(?:\.\d+)?)\s*sqft")
+# taxes live in the "Taxes (annual)" block — the $ figures near "Municipal
+# Assessment" are evaluations, not taxes, so the search is windowed
+_RX_DET_TAXM = re.compile(r"\$\s?([\d,]+)(?:\s*\(\d{4}\))?\s*Municipal")
+_RX_DET_TAXS = re.compile(r"\$\s?([\d,]+)(?:\s*\(\d{4}\))?\s*School")
+_RX_DET_ADDR = re.compile(r"\((?:Active|Sold|Vendu)\)\s*Centris No\.\s*\n\s*(.+)")
+# room rows come out glued: "GF Living room Fireplace-Stove. Stone
+# fireplaceWood23.1 X 18 ft irr" — level, name, optional extras+floor, dims
+_RX_DET_ROOM = re.compile(
+    r"(?m)^(GF|GL|RC|RJ|SS|GR|B|\d)\s+([A-ZÉ][a-zé][A-Za-zéè'’ -]*?)"
+    r"\s*(?:[A-ZÉ][a-zé][\w .,'’/-]*?)?(\d{1,2}(?:\.\d+)?)\s*X\s*"
+    r"(\d{1,2}(?:\.\d+)?)\s*ft")
+_RX_DET_REMARKS = re.compile(
+    r"Remarks\s*([\s\S]{60,4000}?)(?:Addendum|Sale with|Seller.s declaration|"
+    r"Source:|Centris No\.|$)")
+
+
+def is_detailed_pdf(text: str) -> bool:
+    return bool(_RX_DET_FOOTER.search(text))
+
+
+def _parse_detail_text(text: str) -> dict:
+    out: dict = {}
+    if m := _RX_DET_YEAR.search(text):
+        out["year"] = int(m.group(1))
+    lot = None
+    if m := _RX_DET_LOT.search(text):
+        lot = float(m.group(1).replace(",", ""))
+        out["lot_sqft"] = round(lot)
+    # living area: the labels/values interleave unpredictably in extraction —
+    # take the smallest plausible sqft figure that isn't the lot
+    vals = [float(v.replace(",", "")) for v in _RX_DET_SQFT.findall(text)]
+    vals = [v for v in vals if 250 <= v <= 25_000 and v != lot]
+    if vals:
+        out["living_sqft"] = round(min(vals))
+    tax_i = text.find("Taxes (annual)")
+    if tax_i >= 0:
+        tax_win = text[tax_i:tax_i + 260]
+        if m := _RX_DET_TAXM.search(tax_win):
+            out["taxes_mun"] = int(m.group(1).replace(",", ""))
+        if m := _RX_DET_TAXS.search(tax_win):
+            out["taxes_school"] = int(m.group(1).replace(",", ""))
+    if m := _RX_DET_ADDR.search(text):
+        out["address"] = m.group(1).strip()[:290]
+    if m := _RX_DET_REMARKS.search(text):
+        out["remarks"] = re.sub(r"\s+", " ", m.group(1)).strip()[:1400]
+    elif (i := text.find("Remarks")) >= 0:  # very long remarks: hard cut
+        out["remarks"] = re.sub(r"\s+", " ", text[i + 7:i + 1400]).strip()
+    rooms = [{"level": lv, "name": name.strip(),
+              "w_ft": float(w), "d_ft": float(d)}
+             for lv, name, w, d in _RX_DET_ROOM.findall(text)]
+    if rooms:
+        out["rooms"] = rooms[:24]
+    return out
+
+
+def parse_detailed_pdf(data: bytes) -> list[dict]:
+    """→ [{centris_no, year?, living_sqft?, lot_sqft?, taxes_mun?,
+    taxes_school?, address?, remarks?, rooms?, photos: [bytes]}].
+    Photos come only from album pages (≥6 images) so the broker's own
+    logo/headshot on the header page never leaks into a listing gallery."""
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"PDF illisible: {exc}") from exc
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+    for page in reader.pages:
+        t = page.extract_text() or ""
+        m = _RX_DET_FOOTER.search(t)
+        if not m:
+            continue
+        no = m.group(1)
+        if no not in groups:
+            groups[no] = {"text": "", "photos": []}
+            order.append(no)
+        groups[no]["text"] += "\n" + t
+        try:
+            imgs = list(page.images)
+        except Exception:  # noqa: BLE001 — pillow missing / odd encodings
+            imgs = []
+        if len(imgs) >= 6:  # album page
+            for im in imgs:
+                try:
+                    blob = im.data
+                except Exception:  # noqa: BLE001
+                    continue
+                if blob and len(blob) >= 9000:
+                    groups[no]["photos"].append(blob)
+    return [{"centris_no": no, **_parse_detail_text(groups[no]["text"]),
+             "photos": groups[no]["photos"][:12]} for no in order]
+
+
 def fetch_pdf_link(url: str, max_bytes: int = 20_000_000) -> bytes | None:
     """One GET of a PDF link found in an email addressed to the intake inbox
     (Matrix « Email PDF » sends a link, not an attachment). The hub acts as
