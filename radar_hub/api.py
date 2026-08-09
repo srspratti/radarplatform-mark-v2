@@ -276,6 +276,42 @@ def matrix_poll(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return mx.poll_matrix_inbox(db, t)
 
 
+class PdfIngestIn(BaseModel):
+    contact_id: int
+    content_b64: str
+    filename: str = ""
+
+
+@router.post("/connectors/matrix/ingest-pdf", dependencies=[Depends(auth)])
+def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
+                      t: str = Depends(tenant)):
+    """Link-only boards: the realtor exports the auto-email results from
+    Matrix (select All → Print/Email PDF, detailed format) and drops the PDF
+    here — its rows become the client's Vitrine listings (deduped, mirrored
+    by alert_mailer exactly like email-parsed cards)."""
+    import base64 as _b64
+    from .connectors import matrix_pdf
+    c = db.get(Contact, body.contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    if len(body.content_b64) > 27_000_000:  # ~20 MB decoded
+        raise HTTPException(422, "PDF trop lourd (max ~20 Mo)")
+    try:
+        cards = matrix_pdf.parse_matrix_pdf(_b64.b64decode(body.content_b64))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if not cards:
+        raise HTTPException(422,
+                            "Aucune inscription reconnue dans ce PDF — "
+                            "utiliser un export de la grille de résultats "
+                            "(my:Partial, Client Detailed…), pas un rapport "
+                            "photo seul.")
+    raw_id = (f"pdf-{body.filename}" if body.filename
+              else f"pdf-{utcnow():%Y%m%d%H%M%S}")
+    out = mx.store_listings(db, t, c, cards, raw_id=raw_id)
+    return {"parsed_rows": len(cards), **out}
+
+
 # ---------------------------------------------------------------- webhooks --
 @router.post("/webhooks/vitrine")
 async def vitrine_webhook(request: Request, db: Session = Depends(get_db),

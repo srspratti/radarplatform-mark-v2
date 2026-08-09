@@ -559,6 +559,27 @@ function ContactsView({toast, on, feats}) {
           </div>
           {toolOut && <pre className="mono text-[10px] mt-2 p-2 bg-black/30 rounded whitespace-pre-wrap max-h-40 overflow-auto">{toolOut}</pre>}
         </div>}
+        <div className="panel p-3 mt-3">
+          <div className="mono text-[10px] amber mb-2">{T("▮ IMPORT PDF MATRIX — tableaux sans inscriptions dans le courriel","▮ MATRIX PDF IMPORT — boards with link-only emails")}</div>
+          <label className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer inline-block">
+            {T("📄 Déposer le PDF des résultats…","📄 Drop the results PDF…")}
+            <input type="file" accept="application/pdf" className="hidden" onChange={async(e)=>{
+              const f=e.target.files && e.target.files[0]; if(!f) return;
+              const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+                rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+              try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
+                  body:JSON.stringify({contact_id:sel.id, content_b64:b64, filename:f.name})});
+                toast(T(`${r.parsed_rows} ligne(s) lues — ${r.listings_new} nouvelle(s) inscription(s), ${r.listings_dup} déjà connue(s)`,
+                        `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`)); }
+              catch(err){ toast(err.message,true); }
+              e.target.value="";
+            }}/>
+          </label>
+          <div className="mono text-[10px] text-[var(--mute)] mt-2">
+            {T("Dans Matrix : ouvrir les résultats de l'auto-courriel → Sélectionner tout → Imprimer/Envoyer PDF (format détaillé, ex. my:Partial) → déposer ici. Les inscriptions apparaissent dans la Vitrine du client. Aussi automatique : envoyer ce PDF par courriel à l'adresse d'admission du client.",
+               "In Matrix: open the auto-email results → Select all → Print/Email PDF (detailed format, e.g. my:Partial) → drop it here. Listings appear in the client's Vitrine. Also automatic: email that PDF to the client's intake address.")}
+          </div>
+        </div>
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}
         <div className="panel p-3 mt-3">
           <div className="mono text-[10px] amber mb-2">{T("▮ CHRONOLOGIE UNIFIÉE — Vitrine + Matrix + FUB + Hub","▮ UNIFIED TIMELINE — Vitrine + Matrix + FUB + Hub")}</div>

@@ -321,16 +321,29 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
 
 
 def process_raw_email(db: Session, tenant_id: str, raw: str,
-                      raw_id: str = "") -> dict:
+                      raw_id: str = "",
+                      pdf_attachments: list[bytes] | None = None) -> dict:
     """Full pipeline for one Matrix email:
     1. route by per-client intake address (To/Cc) — strongest signal
     2. extract listing cards → client's Vitrine inventory
     3. run the kind parser (visit / alert-created / match) for events
+    Link-only boards: when the body has no cards but the email carries a PDF
+    (Matrix "Email PDF" of the results grid), the PDF is parsed instead.
     """
     contact = contact_by_recipient(db, tenant_id, raw)
     cards = parse_listing_cards(raw)
+    pdf_rows = 0
+    if not cards and pdf_attachments:
+        from .matrix_pdf import parse_matrix_pdf
+        for blob in pdf_attachments:
+            try:
+                cards.extend(parse_matrix_pdf(blob))
+            except ValueError:
+                continue
+        pdf_rows = len(cards)
     parsed = parse_matrix_email(raw)
     out: dict = {"routed_by_intake": bool(contact),
+                 "pdf_listings": pdf_rows,
                  "parsed": {"kind": parsed.kind,
                             "confidence": parsed.confidence,
                             "name": parsed.name,
@@ -383,16 +396,22 @@ def poll_matrix_inbox(db: Session, tenant_id: str) -> dict:
         _, msg_data = box.fetch(mid, "(RFC822)")
         msg = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
         text = ""
+        pdfs: list[bytes] = []
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
                     text += part.get_content()
+                elif part.get_content_type() == "application/pdf":
+                    blob = part.get_payload(decode=True)
+                    if blob:
+                        pdfs.append(blob)
         else:
             text = msg.get_content()
         headers = (f"To: {msg.get('To', '')}\nCc: {msg.get('Cc', '')}\n"
                    f"Delivered-To: {msg.get('Delivered-To', '')}\n"
                    f"Subject: {msg.get('Subject', '')}\n")
         results.append(process_raw_email(db, tenant_id, headers + text,
-                                         raw_id=msg.get("Message-ID", str(mid))))
+                                         raw_id=msg.get("Message-ID", str(mid)),
+                                         pdf_attachments=pdfs))
     box.logout()
     return {"polled": len(ids), "results": results}

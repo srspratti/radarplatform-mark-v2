@@ -138,6 +138,20 @@ activity summaries as person notes. Schedule both (§7).
 5. Pull cycle: `POST /api/connectors/matrix/poll` (schedule it, §7), or test
    any single email with `scripts/ingest_email.sh`.
 
+**Link-only boards (no listings in the email body).** Some Matrix boards send
+alerts that contain only a "View All Listings" portal link — nothing to parse.
+The compliant workaround is built in: in Matrix, open the auto-email results →
+select **All** → **Print/Email PDF** with a detailed grid format (e.g.
+`my:Partial`, `Client Detailed`), then either
+- **Email the PDF to the client's intake address** — the IMAP poll parses the
+  attachment automatically when the body has no cards, or
+- **drop it in `/ops`** (client drawer → "Import PDF Matrix"), or
+- `POST /api/connectors/matrix/ingest-pdf` (`contact_id` + `content_b64`).
+Rows are deduped per client and mirrored by `alert_mailer` exactly like
+email-parsed cards. Four human clicks in Matrix, zero automation of Centris.
+(`RADAR_EDITION=internal` additionally unlocks the fenced RPA scaffold in
+`internal/` — broker's own account, personal testing only, dry-run default.)
+
 ### 5.3 Vitrine webhook secret
 Set `VITRINE_WEBHOOK_SECRET` on the server. The bundled portal is same-origin
 so nothing else to configure; if you ever host the portal separately, sign
