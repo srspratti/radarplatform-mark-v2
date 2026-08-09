@@ -278,12 +278,20 @@ const DEMO_LISTINGS = [
 ];
 // [radar-platform] live-listings hook: the bridge supplies __VITRINE_MERGE__ to blend
 // Matrix-parsed listings with these demo templates. No bridge -> pure demo.
-const LISTINGS = ((typeof window !== "undefined" && window.__VITRINE_MERGE__)
-  ? window.__VITRINE_MERGE__(DEMO_LISTINGS) : DEMO_LISTINGS)
-  // enriched listings carry real room dimensions (Client Detailed PDF) —
-  // the 3D dollhouse is generated from them instead of the demo template
-  .map((l) => (l.ficheRooms && l.ficheRooms.length >= 3
-    ? { ...l, plan: layoutPlan(l.ficheRooms) } : l));
+const LISTINGS = (typeof window !== "undefined" && window.__VITRINE_MERGE__)
+  ? window.__VITRINE_MERGE__(DEMO_LISTINGS) : DEMO_LISTINGS;
+
+// Enriched listings carry real room dimensions (Client Detailed PDF) — the 3D
+// dollhouse is generated from them instead of the demo template. Deferred to
+// first use (NOT module load: layoutPlan's ROOM_KIND table is declared later
+// in the file — calling it during module evaluation is a TDZ crash) and
+// cached so the listing object identity stays stable across renders.
+const _planCache = {};
+function withRealPlan(l) {
+  if (!l || !l.ficheRooms || l.ficheRooms.length < 3) return l;
+  if (!_planCache[l.id]) _planCache[l.id] = { ...l, plan: layoutPlan(l.ficheRooms) };
+  return _planCache[l.id];
+}
 
 // [radar-platform] patch (i): plan-resolved portal capabilities — the bridge
 // fetches /api/vitrine/features per token. No bridge (pure demo) → everything
@@ -1971,7 +1979,7 @@ function App() {
     })();
   }, []);
 
-  const listing = LISTINGS.find((l) => l.id === listingId) || LISTINGS[0];
+  const listing = withRealPlan(LISTINGS.find((l) => l.id === listingId) || LISTINGS[0]);
 
   function log(type, meta, lid) {
     // co_buyer: every action names who did it (couples sharing one portal)
