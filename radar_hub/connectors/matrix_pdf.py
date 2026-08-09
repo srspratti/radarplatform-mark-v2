@@ -8,14 +8,17 @@ select All → Print (my:Partial / Client Detailed / …) → **Print to PDF** o
 the document that human exported — same compliance posture as reading the
 notification emails.
 
-Two entry points feed the same pipeline as email cards:
+Entry points feeding the same pipeline as email cards:
   • POST /api/connectors/matrix/ingest-pdf  — upload from /ops (client drawer)
-  • a PDF attached to an email sent to the client's intake address — the
-    IMAP poll extracts and parses it when the body itself has no cards.
+  • a PDF attached to an email sent to the client's intake address
+  • opt-in (matrix_pdf_link_fetch): the PDF link inside a Matrix "Email PDF"
+    message addressed to the intake inbox.
 
-Parser: anchored on the "date + Centris number" pair that starts every row of
-the results grid (works for my:Partial and the stock Partial/Summary layouts);
-tolerant of column drift because everything else is best-effort per row.
+Parser reality check (validated on a real my:Partial export): pypdf's text
+run glues fields together — `17004507ACMont Blanc143-145 Allée du 15e$28,000…`,
+`CTDET13 3+1 3+0` — and the next row's date can stick to this row's tail.
+Everything below is written for that glued form and stays tolerant of the
+spaced form some boards produce.
 """
 from __future__ import annotations
 
@@ -24,14 +27,24 @@ import re
 
 from pypdf import PdfReader
 
-# 2026-08-09  17004507   — every grid row starts with Emailed date + Centris no
-_RX_ROW = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(\d{7,8})\b")
+# 2026-08-09 + Centris no. starts every grid row. The number is usually GLUED
+# to what follows ("17004507ACMont…") — digit→letter is NOT a \b word
+# boundary, so a non-digit lookahead is required instead.
+_RX_ROW = re.compile(r"(\d{4}-\d{2}-\d{2})\s*(\d{7,8})(?=\D|$)")
 _RX_PRICE = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d{4,7})")
-_RX_FR_PRICE = re.compile(r"(\d{1,3}(?:[  ]\d{3})+|\d{4,7})\s?\$")
+_RX_FR_PRICE = re.compile(r"(\d{1,3}(?:[  ]\d{3})+|\d{4,7})\s?\$")
 # "3+1" pairs from the Bdrm and Bath/PR columns
-_RX_PLUS_PAIR = re.compile(r"\b(\d{1,2})\+(\d{1,2})\b")
-# street part starts at the civic number ("143-145 Allée du 15e", "9-9A Rue …")
-_RX_STREET = re.compile(r"\b(\d{1,5}[A-Za-z]?(?:-\d{1,5}[A-Za-z]?)?\s+\S.*)")
+_RX_PLUS_PAIR = re.compile(r"(\d{1,2})\+(\d{1,2})")
+# street starts at the FIRST digit — the civic number is glued to the
+# municipality name ("Mont Blanc143-145 Allée…"), and municipality names
+# don't contain digits.
+_RX_STREET = re.compile(r"\d.*")
+# "(CPP 2026-08" style note wedged between the number and the status code
+_RX_NOTE = re.compile(r"^\s*\(\w{2,6}[\s\d-]*\)?")
+# status code glued to the municipality ("ACMont Blanc", "ACS Anne du Lac")
+_RX_STATUS = re.compile(r"^\s*(?:AC|PC|EXP|VEN|SLD|CU|INC)(?=[A-ZÉÀÈÎÔ' ])")
+# property type glued to building type ("CTDET13", "BUNDET8")
+_RX_PT = re.compile(r"[\s\d](BUN|CT|MOB|PP)(?=[A-Z])")
 _PT_LABELS = {"BUN": "Bungalow", "CT": "À étages / Cottage",
               "MOB": "Maison mobile", "PP": "Plain-pied"}
 
@@ -59,20 +72,20 @@ def parse_matrix_pdf_text(text: str) -> list[dict]:
             len(text), m.end() + 400)
         win = text[m.end():hi]
         price_m = _RX_PRICE.search(win) or _RX_FR_PRICE.search(win)
-        price = int(re.sub(r"[  ,]", "", price_m.group(1))) if price_m else 0
+        price = int(re.sub(r"[  ,]", "", price_m.group(1))) if price_m else 0
         # municipality + street live between the row anchor and the price
         head = win[:price_m.start()] if price_m else win[:80]
-        head = re.sub(r"^\s*(?:AC|PC|EXP|VEN|SLD|CU)\b", "", head).strip()
+        head = _RX_STATUS.sub("", _RX_NOTE.sub("", head)).strip()
         street_m = _RX_STREET.search(head)
         if street_m:
-            address = street_m.group(1).strip()
+            address = street_m.group(0).strip()
             area = head[:street_m.start()].strip(" ,·")
         else:
             address, area = head.strip(), ""
         pairs = _RX_PLUS_PAIR.findall(win)
         beds = int(pairs[0][0]) if pairs else 0
         baths = int(pairs[1][0]) if len(pairs) > 1 else 0
-        pt = re.search(r"\b(BUN|CT|MOB|PP)\b", win)
+        pt = _RX_PT.search(win)
         cards.append({
             "centris_no": no,
             "url": "",   # the grid has no per-listing links — the Vitrine

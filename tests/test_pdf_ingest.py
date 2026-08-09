@@ -6,11 +6,17 @@ from radar_hub.models import Listing
 
 T = "danny"
 
+# Real-world shape (validated against a live my:Partial export): pypdf glues
+# fields together — number to status to municipality to street, PT to BT —
+# and the next row's date can stick to the previous row's tail.
 SAMPLE_TEXT = """Partial
-Emailed Centris No. ST Mun/Bor. Address Price Building Size Year Built PT BT
-2026-08-09 17004507 AC Mont Blanc 143-145 Allee du 15e $28,000/month X 3 month(s) 79 X 39.4 ft irr 4,690.8 sqm 2010 CT DET 13 3+1 3+0 Y Y N
-2026-08-09 12149325 AC S Anne du Lac 9-9A Rue Sicotte $449,900 28 X 42 ft $216,200 $50,100 1976 BUN DET 8 3+2 2+0 N Y Y
-2026-08-09 24256061 AC Riviere Rouge 150 Ch. Papp $534,500 35.6 X 33.9 ft irr $239,200 $221,600 1962 BUN DET 8 3+2 2+0 Y N N
+Emailed
+ Centris No.STMun/Bor. Address PriceAsked/Sold PriceBuilding SizeYear BuiltPT BT RmsBdrmBath/PR
+2026-08-09
+17004507ACMont Blanc143-145 Allee du 15e$28,000/monthX 3 month(s) 79 X 39.4 ft irr 4,690.8 sqm 2010 CTDET13 3+1 3+0 Y Y N
+2026-08-09
+12149325ACS Anne du Lac9-9A Rue Sicotte $449,900 $449,90028 X 42 ft 9,371 sqm$216,200$50,100 1976 BUNDET8 3+2 2+0 N Y Y2026-08-09
+24256061ACRiviere Rouge150 Ch. Papp $534,500 $534,50035.6 X 33.9 ft irr 7,293.3 sqm$239,200$221,6001962 BUNDET8 3+2 2+0 Y N N
 """
 
 
@@ -53,8 +59,12 @@ def test_parse_matrix_grid_rows():
                                                 "24256061"]
     by_no = {c["centris_no"]: c for c in cards}
     assert by_no["12149325"]["price"] == 449900
-    assert by_no["12149325"]["address"].startswith("9-9A Rue Sicotte")
+    assert by_no["12149325"]["address"] == "9-9A Rue Sicotte"
     assert by_no["12149325"]["area"] == "S Anne du Lac"
+    assert by_no["17004507"]["address"] == "143-145 Allee du 15e"
+    assert by_no["17004507"]["area"] == "Mont Blanc"
+    assert by_no["24256061"]["address"] == "150 Ch. Papp"
+    assert by_no["24256061"]["area"] == "Riviere Rouge"
     assert by_no["12149325"]["beds"] == 3 and by_no["12149325"]["baths"] == 2
     assert by_no["12149325"]["prop_type"] == "Bungalow"
     assert by_no["17004507"]["price"] == 28000  # rental — number still lands
