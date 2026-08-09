@@ -1699,8 +1699,17 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
           <span style={{ fontSize: 12.5, color: C.sub }}>{t("Éval. municipale", "Municipal eval.")} {fmt$(l.evalMun, lang)}</span>
         </div>
         <div className="flex flex-wrap gap-1.5 mt-2.5">
-          <Pill tone="blue">{lang === "fr" ? l.typeFr : l.typeEn}</Pill><Pill>{l.beds} {t("ch.", "bd")} · {l.baths} {t("sdb", "ba")}</Pill><Pill>{fmtN(l.sqft, lang)} pi²</Pill><Pill>{l.year}</Pill>
+          <Pill tone="blue">{lang === "fr" ? l.typeFr : l.typeEn}</Pill><Pill>{l.beds} {t("ch.", "bd")} · {l.baths} {t("sdb", "ba")}</Pill>
+          {/* sqft/year come from the demo template — only shown when real */}
+          {!l.isLive && <Pill>{fmtN(l.sqft, lang)} pi²</Pill>}{!l.isLive && <Pill>{l.year}</Pill>}
         </div>
+        {l.isLive && (
+          <div className="mt-3 rounded-xl p-3 flex items-start gap-2" style={{ background: C.ochreSoft, border: "1px solid #EBD3A0", fontSize: 12, color: C.ink, lineHeight: 1.5 }}>
+            <AlertTriangle size={14} style={{ color: "#8A5A12", marginTop: 2, flexShrink: 0 }} />
+            {t("Fiche en cours d'enrichissement — prix, adresse et pièces proviennent de votre alerte Centris; les analyses ci-dessous (coûts, quartier, prévisions) sont des estimations génériques. La fiche Centris officielle fait foi.",
+               "Sheet being enriched — price, address and rooms come from your Centris alert; the analyses below (costs, neighbourhood, forecast) are generic estimates. The official Centris sheet is authoritative.")}
+          </div>
+        )}
         <button onClick={() => goto("cout")} className="mt-4 w-full text-left rounded-2xl p-4" style={{ background: C.ink, color: "#fff" }}>
           <div className="flex items-center justify-between">
             <div>
@@ -1747,9 +1756,11 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
         <HoodSection l={l} lang={lang} refEl={refs.quartier} />
         <AmenitiesSection l={l} lang={lang} log={log} refEl={refs.commodites} />
         <RiskSection l={l} lang={lang} log={log} refEl={refs.risques} />
-        {l.fund && <FundSection l={l} lang={lang} />}
-        <CompsSection l={l} lang={lang} />
-        <section className="rounded-2xl p-4 sm:p-5" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+        {/* template-only sections assert per-property FACTS (declarations,
+            fund, comps) — never shown for live listings until enriched */}
+        {!l.isLive && l.fund && <FundSection l={l} lang={lang} />}
+        {!l.isLive && <CompsSection l={l} lang={lang} />}
+        {!l.isLive && <section className="rounded-2xl p-4 sm:p-5" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
           <SectionHead icon={FileText} title={t("Déclarations du vendeur", "Seller’s declarations")} note={t("extraits vérifiables", "verifiable extracts")} />
           <div className="space-y-2.5">
             {l.dv.map((d) => (
@@ -1760,7 +1771,7 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
             ))}
           </div>
           <div className="mt-3" style={{ fontSize: 12.5, color: C.ink }}><b>{t("Inclusions :", "Inclusions:")}</b> {lang === "fr" ? l.inclFr : l.inclEn} · <b>{t("Stationnement :", "Parking:")}</b> {lang === "fr" ? l.parkFr : l.parkEn}</div>
-        </section>
+        </section>}
         <NotesSection lang={lang} log={log} myNotes={myNotes} setNote={setNote} refEl={refs.notes} />
         {featOn("offer_checklist") && <OfferChecklistSection lang={lang} log={log} />}
         <ChatSection l={l} lang={lang} log={log} chat={chat} setChat={setChat} refEl={refs.questions} />
