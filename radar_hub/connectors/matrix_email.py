@@ -405,9 +405,19 @@ def poll_matrix_inbox(db: Session, tenant_id: str) -> dict:
     """IMAP pull of unseen Matrix notifications. Same pattern as Radar Acheteur."""
     if not (settings.MATRIX_IMAP_HOST and settings.MATRIX_IMAP_USER):
         return {"polled": 0, "error": "IMAP non configuré (MATRIX_IMAP_*)"}
-    box = imaplib.IMAP4_SSL(settings.MATRIX_IMAP_HOST)
-    box.login(settings.MATRIX_IMAP_USER, settings.MATRIX_IMAP_PASS)
-    box.select(settings.MATRIX_IMAP_FOLDER)
+    try:
+        box = imaplib.IMAP4_SSL(settings.MATRIX_IMAP_HOST)
+        box.login(settings.MATRIX_IMAP_USER, settings.MATRIX_IMAP_PASS)
+        box.select(settings.MATRIX_IMAP_FOLDER)
+    except imaplib.IMAP4.error as exc:
+        return {"polled": 0, "error":
+                f"Connexion IMAP refusée pour {settings.MATRIX_IMAP_USER}: "
+                f"{exc} — vérifier le MOT DE PASSE D'APPLICATION (16 "
+                "caractères, sans espaces, généré sur CE compte, 2FA activée)"}
+    except OSError as exc:
+        return {"polled": 0,
+                "error": f"Serveur IMAP injoignable "
+                         f"({settings.MATRIX_IMAP_HOST}): {exc}"}
     _, data = box.search(None, "UNSEEN")
     ids = data[0].split()
     results = []
