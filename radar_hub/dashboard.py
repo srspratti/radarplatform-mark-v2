@@ -267,6 +267,14 @@ function RadarView({toast, on, feats}) {
               toast(T(`GHL : ${r.sent} note(s) poussée(s), ${r.manual} manuel(s)`,`GHL: ${r.sent} note(s) pushed, ${r.manual} manual`)); }
               catch(e){ toast(e.message,true);} }}
             className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-cyan-400">{T("↥ Notes GHL","↥ GHL notes")}</button>
+          <button title={T("Import + writebacks sur chaque CRM configuré (FUB, GHL, …)","Import + writebacks on every configured CRM (FUB, GHL, …)")}
+            onClick={async()=>{ try{ const r=await api("/connectors/crm/sync",{method:"POST"});
+              toast(r.configured.length
+                ? T(`Sync CRM (${r.configured.join(", ")}) : `,`CRM sync (${r.configured.join(", ")}): `)
+                  + Object.entries(r.results).map(([k,v])=>`${k} +${v.import.imported}/↥${v.writebacks.sent}`).join(" · ")
+                : T("Aucun CRM configuré (FUB_API_KEY ou GHL_*)","No CRM configured (FUB_API_KEY or GHL_*)"), !r.configured.length);
+              await load(); }catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded bg-[var(--amber)]/90 text-black font-semibold hover:bg-[var(--amber)]">{T("⟳ Sync CRM","⟳ CRM sync")}</button>
         </div>
       </div>
       <div className="mono text-[10px] text-[var(--mute)] mb-3">

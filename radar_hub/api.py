@@ -272,6 +272,21 @@ def ghl_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return ghl_conn.flush_writebacks_ghl(db, t)
 
 
+@router.get("/connectors/crm/status", dependencies=[Depends(auth)])
+def crm_status():
+    from .connectors import crm
+    return crm.status()
+
+
+@router.post("/connectors/crm/sync", dependencies=[Depends(auth)])
+def crm_sync(limit: int = 100, db: Session = Depends(get_db),
+             t: str = Depends(tenant)):
+    """CRM-agnostic: import + flush on every configured CRM — the one
+    endpoint to schedule regardless of which CRM a deployment uses."""
+    from .connectors import crm
+    return crm.sync_all(db, t, limit=limit)
+
+
 class RawEmailIn(BaseModel):
     raw: str
     message_id: str = ""

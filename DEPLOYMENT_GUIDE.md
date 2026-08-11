@@ -239,8 +239,7 @@ Any cron (server, GitHub Actions, or a tiny Fly machine) hitting:
 
 ```cron
 */10 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/matrix/poll
-*/15 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/flush-writebacks
-0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/import
+0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/crm/sync   # CRM-agnostic: import + writebacks on FUB/GHL/…
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Marketable]
 0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
 0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback
