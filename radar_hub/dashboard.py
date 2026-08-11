@@ -93,6 +93,7 @@ const trReport = (s) => { if (LANG==="fr"||!s) return s;
 const SOURCE_META = {
   matrix_visit:      { label:"MATRIX",       cls:"bg-amber-400/15 text-amber-300 border-amber-400/40" },
   fub_import:        { label:"CRM FUB",      cls:"bg-sky-400/15 text-sky-300 border-sky-400/40" },
+  ghl_import:        { label:"CRM GHL",      cls:"bg-cyan-400/15 text-cyan-300 border-cyan-400/40" },
   danny_channel:     { label:"RÉFÉRENCE",    cls:"bg-emerald-400/15 text-emerald-300 border-emerald-400/40" },
   own_generated:     { label:"SITE WEB",     cls:"bg-violet-400/15 text-violet-300 border-violet-400/40" },
   prospecting_agent: { label:"PROSPECTION",  cls:"bg-slate-400/15 text-slate-300 border-slate-400/40" },
@@ -258,6 +259,14 @@ function RadarView({toast, on, feats}) {
             className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("↧ Importer FUB","↧ Import FUB")}</button>
           <button onClick={()=>act(()=>api("/connectors/fub/flush-writebacks",{method:"POST"}),T("Writebacks poussés","Writebacks pushed"))}
             className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("↥ Pousser writebacks","↥ Push writebacks")}</button>
+          <button onClick={async()=>{ try{ const r=await api("/connectors/ghl/import",{method:"POST"});
+              toast(r.error||T(`Import GHL : ${r.imported} importé(s), ${r.skipped} déjà connu(s)`,`GHL import: ${r.imported} imported, ${r.skipped} known`), !!r.error); await load(); }
+              catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-cyan-400">{T("↧ Importer GHL","↧ Import GHL")}</button>
+          <button onClick={async()=>{ try{ const r=await api("/connectors/ghl/flush-writebacks",{method:"POST"});
+              toast(T(`GHL : ${r.sent} note(s) poussée(s), ${r.manual} manuel(s)`,`GHL: ${r.sent} note(s) pushed, ${r.manual} manual`)); }
+              catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-cyan-400">{T("↥ Notes GHL","↥ GHL notes")}</button>
         </div>
       </div>
       <div className="mono text-[10px] text-[var(--mute)] mb-3">
@@ -340,10 +349,10 @@ function RadarView({toast, on, feats}) {
 // ---------------------------------------------------------- CONTACTS view --
 const FUNNEL_LABEL = { fub_import:"CRM FUB", matrix_visit:"Alertes Matrix",
   danny_channel:"Références", own_generated:"Site web", prospecting_agent:"Prospection",
-  open_house:"Porte ouverte", seller_intel:"Vendeurs (IA)" };
+  open_house:"Porte ouverte", seller_intel:"Vendeurs (IA)", ghl_import:"CRM GoHighLevel" };
 const FUNNEL_LABEL_EN = { fub_import:"FUB CRM", matrix_visit:"Matrix alerts",
   danny_channel:"Referrals", own_generated:"Website", prospecting_agent:"Prospecting",
-  open_house:"Open house", seller_intel:"Sellers (AI)" };
+  open_house:"Open house", seller_intel:"Sellers (AI)", ghl_import:"GoHighLevel CRM" };
 const chipCls = (on)=>"mono text-[10px] px-2.5 py-1 rounded-full border transition-colors "
   +(on?"border-[var(--amber)] amber bg-[var(--amber)]/10"
       :"border-[var(--line)] text-[var(--mute)] hover:text-[var(--ink)]");

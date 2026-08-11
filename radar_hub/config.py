@@ -16,6 +16,14 @@ class Settings:
     FUB_API_KEY: str = os.getenv("FUB_API_KEY", "")
     FUB_BASE: str = os.getenv("FUB_BASE", "https://api.followupboss.com/v1")
 
+    # GoHighLevel (same connector contract as FUB: import + note writeback).
+    # GHL_API_KEY = a Private Integration token (Settings → Private
+    # Integrations, scopes: contacts read/write); GHL_LOCATION_ID = the
+    # sub-account's location id.
+    GHL_API_KEY: str = os.getenv("GHL_API_KEY", "")
+    GHL_LOCATION_ID: str = os.getenv("GHL_LOCATION_ID", "")
+    GHL_BASE: str = os.getenv("GHL_BASE", "https://services.leadconnectorhq.com")
+
     # Matrix inbox (IMAP ingestion of Centris/Matrix notification emails)
     MATRIX_IMAP_HOST: str = os.getenv("MATRIX_IMAP_HOST", "")
     MATRIX_IMAP_USER: str = os.getenv("MATRIX_IMAP_USER", "")

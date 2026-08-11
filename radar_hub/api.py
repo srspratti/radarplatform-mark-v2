@@ -21,6 +21,7 @@ from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
 from .stages import STAGE_LABELS_FR, STAGE_ORDER
 from .connectors import fub as fub_conn
+from .connectors import gohighlevel as ghl_conn
 from .connectors import matrix_email as mx
 from .connectors import vitrine as vit
 from .agents import office_manager as office
@@ -258,6 +259,17 @@ def fub_import(limit: int = 100, db: Session = Depends(get_db),
 @router.post("/connectors/fub/flush-writebacks", dependencies=[Depends(auth)])
 def fub_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return fub_conn.flush_writebacks(db, t)
+
+
+@router.post("/connectors/ghl/import", dependencies=[Depends(auth)])
+def ghl_import(limit: int = 100, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    return ghl_conn.import_from_ghl(db, t, ghl_conn.GHLClient(), limit=limit)
+
+
+@router.post("/connectors/ghl/flush-writebacks", dependencies=[Depends(auth)])
+def ghl_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    return ghl_conn.flush_writebacks_ghl(db, t)
 
 
 class RawEmailIn(BaseModel):
@@ -1796,7 +1808,8 @@ def consents_export(db: Session = Depends(get_db), t: str = Depends(tenant)):
 # --------------------------------------------------------------- analytics --
 FUNNEL_LABELS_FR = {"fub_import": "CRM FUB", "matrix_visit": "Alertes Matrix",
                     "danny_channel": "Références", "own_generated": "Site web",
-                    "prospecting_agent": "Prospection"}
+                    "prospecting_agent": "Prospection",
+                    "ghl_import": "CRM GoHighLevel"}
 
 
 def _analytics_stats(db: Session, t: str) -> dict:

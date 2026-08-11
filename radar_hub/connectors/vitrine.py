@@ -149,6 +149,9 @@ def enqueue_activity_writeback(db: Session, tenant_id: str, contact: Contact,
     #   internal edition   -> matrix_history_writer.py (RPA) consumes it
     db.add(WritebackItem(tenant_id=tenant_id, contact_id=contact.id,
                          target="matrix_note", body=body))
+    if contact.ghl_contact_id:  # GoHighLevel mirror for GHL-sourced contacts
+        db.add(WritebackItem(tenant_id=tenant_id, contact_id=contact.id,
+                             target="ghl_note", body=body))
     db.commit()
     return item
 

@@ -51,6 +51,7 @@ class Contact(Base):
     portal_token: Mapped[str] = mapped_column(String(64), default="", index=True)  # Vitrine link
     intake_email: Mapped[str] = mapped_column(String(200), default="", index=True)  # per-client Matrix CC
     fub_person_id: Mapped[str] = mapped_column(String(40), default="", index=True)
+    ghl_contact_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     converted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     __table_args__ = (Index("ix_contact_tenant_email", "tenant_id", "email"),)
@@ -319,6 +320,8 @@ def _migrate_contacts() -> None:
         added.append("ALTER TABLE contacts ADD COLUMN funnel VARCHAR(40) DEFAULT ''")
     if "campaign" not in cols:
         added.append("ALTER TABLE contacts ADD COLUMN campaign VARCHAR(120) DEFAULT ''")
+    if "ghl_contact_id" not in cols:
+        added.append("ALTER TABLE contacts ADD COLUMN ghl_contact_id VARCHAR(64) DEFAULT ''")
     lcols = {c["name"] for c in inspect(engine).get_columns("listings")}
     if "details" not in lcols:
         added.append("ALTER TABLE listings ADD COLUMN details JSON")
