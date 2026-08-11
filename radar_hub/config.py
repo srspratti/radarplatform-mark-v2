@@ -24,6 +24,15 @@ class Settings:
     GHL_LOCATION_ID: str = os.getenv("GHL_LOCATION_ID", "")
     GHL_BASE: str = os.getenv("GHL_BASE", "https://services.leadconnectorhq.com")
 
+    # CREA DDF® (RESO Web API) — licensed listing enrichment by MLS number.
+    # The broker applies at crea.ca (member tools / National Shared Pool feed);
+    # unset = the slot stays dormant and PDF enrichment remains the path.
+    DDF_CLIENT_ID: str = os.getenv("DDF_CLIENT_ID", "")
+    DDF_CLIENT_SECRET: str = os.getenv("DDF_CLIENT_SECRET", "")
+    DDF_TOKEN_URL: str = os.getenv("DDF_TOKEN_URL",
+                                   "https://identity.crea.ca/connect/token")
+    DDF_BASE: str = os.getenv("DDF_BASE", "https://ddfapi.realtor.ca/odata/v1")
+
     # Matrix inbox (IMAP ingestion of Centris/Matrix notification emails)
     MATRIX_IMAP_HOST: str = os.getenv("MATRIX_IMAP_HOST", "")
     MATRIX_IMAP_USER: str = os.getenv("MATRIX_IMAP_USER", "")

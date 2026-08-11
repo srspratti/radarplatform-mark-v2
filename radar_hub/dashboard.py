@@ -464,6 +464,32 @@ function ContactsView({toast, on, feats}) {
       <span className="mono text-[9px] text-[var(--mute)] mr-1">{T("STATUT","STATUS")}</span>
       {[["all",T("Tous","All")],["lead",`Leads (${nLeads})`],["client",T("Clients Centris","Centris clients")+` (${contacts.length-nLeads})`]].map(([k,l])=>(
         <button key={k} onClick={()=>setLife(k)} className={chipCls(life===k)}>{l}</button>))}
+      <span className="ml-auto inline-flex gap-2 items-center flex-wrap">
+        <select id="pdfclient" className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]">
+          <option value="0">{T("PDF détaillé — routage auto","Detailed PDF — auto-route")}</option>
+          {contacts.filter(c=>c.lifecycle==="client").map(c=>(
+            <option key={c.id} value={c.id}>{T("Grille pour","Grid for")} {c.name}</option>))}
+        </select>
+        <label className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer">
+          {T("📄 Importer PDF Matrix…","📄 Import Matrix PDFs…")}
+          <input type="file" accept="application/pdf" multiple className="hidden" onChange={async(e)=>{
+            const files=[...(e.target.files||[])]; if(!files.length) return;
+            const cid=+document.getElementById("pdfclient").value;
+            let msgs=[];
+            for (const f of files){
+              const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+                rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+              try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
+                  body:JSON.stringify({contact_id:cid, content_b64:b64, filename:f.name})});
+                msgs.push(r.mode==="detailed"
+                  ? `${f.name}: ${r.enriched.length} ${T("enrichie(s)","enriched")}${r.unmatched&&r.unmatched.length?` · ${r.unmatched.length} ${T("sans preneur","unmatched")}`:""} · ${r.photos_added}📷`
+                  : `${f.name}: ${r.listings_new} ${T("nouvelle(s)","new")}`);
+              }catch(err){ msgs.push(`${f.name}: ${err.message}`); }
+            }
+            toast(msgs.join("  |  "), false); e.target.value="";
+          }}/>
+        </label>
+      </span>
     </div>
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
       {shown.map(c=>(

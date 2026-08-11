@@ -95,6 +95,7 @@ sed -i.bak "s/REPLACE_WITH_CLIENT_INTAKE_EMAIL/<paste-her-address>/" samples/mat
 | `ANTHROPIC_API_KEY` | Vitrine concierge + forecast web-search, Haiku parser fallback, report narrative, outreach/content drafting | console.anthropic.com → API Keys |
 | `FUB_API_KEY` | Follow Up Boss import + note writeback | FUB → Admin → API → Create key |
 | `GHL_API_KEY`, `GHL_LOCATION_ID` | GoHighLevel import + note writeback (same contract as FUB) | GHL sub-account → Settings → **Private Integrations** → create token with *View/Edit Contacts* scopes; location id = sub-account id (Settings → Business Profile) |
+| `DDF_CLIENT_ID/SECRET` | **Licensed** listing enrichment by MLS number (facts + photos, auto-applied to every alert listing) | The broker applies for a CREA **DDF®** feed (crea.ca → DDF® → National Shared Pool, destination "member tool") — CREA issues OAuth2 client credentials. Sweep: `POST /api/connectors/ddf/enrich` (schedule it, §7) |
 | `MATRIX_IMAP_HOST/USER/PASS` | Hub's IMAP poll of the alerts inbox | Gmail: enable 2FA → Security → **App passwords** → Mail. Host `imap.gmail.com` |
 | `INTAKE_EMAIL_MODE/USER/DOMAIN` | Shape of per-client intake addresses | `plus` + the same Gmail user (default) — or `alias` + a catch-all domain |
 | `VITRINE_WEBHOOK_SECRET` | HMAC on portal webhooks | `openssl rand -hex 24` (same-origin deploys work without it; set it anyway) |
@@ -240,6 +241,7 @@ Any cron (server, GitHub Actions, or a tiny Fly machine) hitting:
 ```cron
 */10 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/matrix/poll
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/crm/sync   # CRM-agnostic: import + writebacks on FUB/GHL/…
+0 */4 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/enrich  # licensed DDF® enrichment (when configured)
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Marketable]
 0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
 0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback

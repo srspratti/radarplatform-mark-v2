@@ -316,6 +316,22 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
         from ..automations import send_listing_alert_email
         alert_status = send_listing_alert_email(db, tenant_id, contact,
                                                 new_cards, raw_id)
+        # Licensed DDF® feed configured → enrich the new rows immediately
+        # (facts + photos by MLS number). Best-effort: the alert pipeline
+        # must never fail because the feed hiccuped.
+        if settings.DDF_CLIENT_ID:
+            from . import ddf
+            from ..models import Listing
+            client = ddf.DDFClient()
+            for card in new_cards:
+                row = (db.query(Listing)
+                       .filter_by(tenant_id=tenant_id, contact_id=contact.id,
+                                  centris_no=card["centris_no"]).first())
+                if row:
+                    try:
+                        ddf.enrich_listing(db, tenant_id, row, client)
+                    except Exception:  # noqa: BLE001
+                        pass
     return {"listings_new": new, "listings_dup": dup,
             "alert_email": alert_status}
 

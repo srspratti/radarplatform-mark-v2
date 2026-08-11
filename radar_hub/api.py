@@ -272,6 +272,24 @@ def ghl_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return ghl_conn.flush_writebacks_ghl(db, t)
 
 
+@router.get("/connectors/ddf/status", dependencies=[Depends(auth)])
+def ddf_status():
+    from .connectors import ddf
+    return {"configured": ddf.DDFClient().configured,
+            "how_to": "Flux DDF® de l'ACI/CREA (crea.ca) — pool national, "
+                      "destination « outil de membre »; brancher "
+                      "DDF_CLIENT_ID/SECRET une fois approuvé."}
+
+
+@router.post("/connectors/ddf/enrich", dependencies=[Depends(auth)])
+def ddf_enrich(limit: int = 50, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    """Licensed enrichment sweep: every listing the DDF® feed hasn't touched
+    yet gets facts + photos by MLS number."""
+    from .connectors import ddf
+    return ddf.sweep(db, t, limit=limit)
+
+
 @router.get("/connectors/crm/status", dependencies=[Depends(auth)])
 def crm_status():
     from .connectors import crm
@@ -304,7 +322,7 @@ def matrix_poll(db: Session = Depends(get_db), t: str = Depends(tenant)):
 
 
 class PdfIngestIn(BaseModel):
-    contact_id: int
+    contact_id: int = 0   # 0 + detailed PDF = route by Centris no. (all clients)
     content_b64: str
     filename: str = ""
 
@@ -318,8 +336,8 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
     by alert_mailer exactly like email-parsed cards)."""
     import base64 as _b64
     from .connectors import matrix_pdf
-    c = db.get(Contact, body.contact_id)
-    if not c or c.tenant_id != t:
+    c = db.get(Contact, body.contact_id) if body.contact_id else None
+    if body.contact_id and (not c or c.tenant_id != t):
         raise HTTPException(404, "contact introuvable")
     if len(body.content_b64) > 27_000_000:  # ~20 MB decoded
         raise HTTPException(422, "PDF trop lourd (max ~20 Mo)")
@@ -329,25 +347,35 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
     except ValueError as e:
         raise HTTPException(422, str(e))
     # Client Detailed export → ENRICHMENT: year/areas/taxes/rooms/remarks into
-    # Listing.details, album photos into listing_photos.
+    # Listing.details, album photos into listing_photos. Without a contact_id
+    # the sheet routes ITSELF: every client holding that Centris no. gets the
+    # enrichment (drop one album, enrich the whole book).
     if matrix_pdf.is_detailed_pdf(text):
         items = matrix_pdf.parse_detailed_pdf(raw)
         created = photos_added = 0
+        enriched, unmatched = [], []
         for item in items:
             no = item["centris_no"]
-            row = (db.query(Listing)
-                   .filter_by(tenant_id=t, contact_id=c.id, centris_no=no)
-                   .first())
-            if not row:
+            q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
+            if c:
+                q = q.filter_by(contact_id=c.id)
+            rows = q.all()
+            if not rows and c:
                 row = Listing(tenant_id=t, contact_id=c.id, centris_no=no,
                               address=item.get("address", ""))
                 db.add(row)
                 created += 1
-            det = dict(row.details or {})
-            det.update({k: v for k, v in item.items()
-                        if k not in ("centris_no", "photos") and v})
-            row.details = det
+                rows = [row]
+            if not rows:
+                unmatched.append(no)
+                continue
+            for row in rows:
+                det = dict(row.details or {})
+                det.update({k: v for k, v in item.items()
+                            if k not in ("centris_no", "photos") and v})
+                row.details = det
             db.commit()
+            enriched.append(no)
             if item["photos"] and features.enabled("listing_photos"):
                 if not (db.query(ListingPhoto)
                         .filter_by(tenant_id=t, centris_no=no).first()):
@@ -358,8 +386,12 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
                         photos_added += 1
                     db.commit()
         return {"mode": "detailed", "parsed_rows": len(items),
-                "enriched": [i["centris_no"] for i in items],
+                "enriched": enriched, "unmatched": unmatched,
                 "listings_new": created, "photos_added": photos_added}
+    if not c:
+        raise HTTPException(422, "PDF de grille : choisir le client "
+                                 "(contact_id requis — la grille ne dit pas à "
+                                 "qui elle appartient)")
     cards = matrix_pdf.parse_matrix_pdf_text(text)
     if not cards:
         raise HTTPException(422,
