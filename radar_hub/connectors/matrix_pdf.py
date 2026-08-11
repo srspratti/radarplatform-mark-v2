@@ -104,6 +104,29 @@ def parse_matrix_pdf(data: bytes) -> list[dict]:
     return parse_matrix_pdf_text(extract_pdf_text(data))
 
 
+# --------------------------------------------------------------------------
+# Numbers-only extraction — for a BROWSER-printed PDF of the client-portal
+# results page ("Centris No. : 17004507" per card). The human opened their
+# own email link and hit Ctrl+P; we only lift the identifiers, and the
+# listing data itself comes from the licensed DDF® feed (or a detailed PDF).
+# --------------------------------------------------------------------------
+_RX_MLS_LABELED = re.compile(
+    r"(?:Centris|MLS)[®\s]*(?:No|N[oº°])?\.?\s*:?\s*(\d{7,8})", re.I)
+_RX_MLS_BARE = re.compile(r"(?<![\d-])(\d{8})(?![\d-])")
+
+
+def parse_mls_numbers(text: str) -> list[str]:
+    """Ordered, deduped MLS/Centris numbers. Labeled occurrences first;
+    bare 8-digit tokens only as a fallback when nothing is labeled."""
+    seen: dict[str, None] = {}
+    for m in _RX_MLS_LABELED.finditer(text):
+        seen.setdefault(m.group(1))
+    if not seen:
+        for m in _RX_MLS_BARE.finditer(text):
+            seen.setdefault(m.group(1))
+    return list(seen)
+
+
 # ---------------------------------------------------------------------------
 # Client Detailed (with Photo Album) — the ENRICHMENT format. Each listing
 # spans consecutive pages carrying a "Centris No. X - Page N of M" footer:

@@ -394,6 +394,30 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
                                  "qui elle appartient)")
     cards = matrix_pdf.parse_matrix_pdf_text(text)
     if not cards:
+        # Browser-printed portal page: identifiers only → stub listings,
+        # substance comes from the licensed DDF® feed (or a detailed PDF).
+        numbers = matrix_pdf.parse_mls_numbers(text)
+        if numbers:
+            created = dup = 0
+            for no in numbers:
+                if (db.query(Listing)
+                        .filter_by(tenant_id=t, contact_id=c.id,
+                                   centris_no=no).first()):
+                    dup += 1
+                    continue
+                db.add(Listing(tenant_id=t, contact_id=c.id, centris_no=no))
+                created += 1
+            db.commit()
+            ddf_result = None
+            if settings.DDF_CLIENT_ID:
+                from .connectors import ddf
+                ddf_result = ddf.sweep(db, t)
+            return {"mode": "numbers", "parsed_rows": len(numbers),
+                    "listings_new": created, "listings_dup": dup,
+                    "ddf": ddf_result,
+                    "note": "identifiants seulement — enrichir via DDF® ou "
+                            "un PDF détaillé"}
+    if not cards:
         raise HTTPException(422,
                             "Aucune inscription reconnue dans ce PDF — "
                             "utiliser un export de la grille de résultats "

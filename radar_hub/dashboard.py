@@ -483,6 +483,8 @@ function ContactsView({toast, on, feats}) {
                   body:JSON.stringify({contact_id:cid, content_b64:b64, filename:f.name})});
                 msgs.push(r.mode==="detailed"
                   ? `${f.name}: ${r.enriched.length} ${T("enrichie(s)","enriched")}${r.unmatched&&r.unmatched.length?` · ${r.unmatched.length} ${T("sans preneur","unmatched")}`:""} · ${r.photos_added}📷`
+                  : r.mode==="numbers"
+                  ? `${f.name}: ${r.listings_new} ${T("nº Centris importé(s)","Centris no. imported")}${r.ddf?` · DDF ${r.ddf.enriched} ${T("enrichie(s)","enriched")}`:T(" (enrichir via DDF/PDF détaillé)"," (enrich via DDF/detailed PDF)")}`
                   : `${f.name}: ${r.listings_new} ${T("nouvelle(s)","new")}`);
               }catch(err){ msgs.push(`${f.name}: ${err.message}`); }
             }

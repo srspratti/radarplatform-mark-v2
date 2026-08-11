@@ -78,6 +78,36 @@ def test_ddf_unconfigured_is_dormant(client):
     assert s["configured"] is False
 
 
+def test_browser_printed_portal_page_numbers_only(client, db):
+    """A human prints the portal results page from the browser — the hub
+    lifts just the Centris numbers and creates stubs for licensed enrichment."""
+    from tests.test_pdf_ingest import _mini_pdf
+    PORTAL_TEXT = """25 Total listings from search Your new listings
+$28,000/month X 3 month[s]
+143-145 Allee du 15e Mont-Blanc
+Two or more storey built in 2010
+Centris No. : 17004507
+Date Sent : 2026-08-09
+$449,900 9-9A Rue Sicotte Sainte-Anne-du-Lac
+Centris No. : 12149325
+Date Sent : 2026-08-09
+"""
+    lead = client.post("/api/leads", json={"name": "Print Client",
+                                           "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    pdf = base64.b64encode(_mini_pdf(PORTAL_TEXT)).decode()
+    r = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": pdf}).json()
+    assert r["mode"] == "numbers" and r["listings_new"] == 2
+    nos = {x.centris_no for x in
+           db.query(Listing).filter_by(contact_id=c["id"]).all()}
+    assert nos == {"17004507", "12149325"}
+    # idempotent
+    r2 = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": pdf}).json()
+    assert r2["listings_new"] == 0 and r2["listings_dup"] == 2
+
+
 def test_detailed_pdf_routes_without_contact(client, db):
     """Global drop: a detailed PDF with no contact_id enriches every client
     holding that Centris number."""
