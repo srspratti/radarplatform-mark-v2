@@ -290,6 +290,16 @@ def ddf_enrich(limit: int = 50, db: Session = Depends(get_db),
     return ddf.sweep(db, t, limit=limit)
 
 
+@router.post("/connectors/ddf/match", dependencies=[Depends(auth)])
+def ddf_match(top: int = 20, db: Session = Depends(get_db),
+              t: str = Depends(tenant)):
+    """Licensed criteria sweep: run each client's saved Vitrine criteria
+    against the DDF® pool and file the matches into their inventory — the
+    fully-programmatic, ToS-clean replacement for reading the Matrix portal."""
+    from .connectors import ddf
+    return ddf.match_criteria(db, t, top=top)
+
+
 @router.get("/connectors/crm/status", dependencies=[Depends(auth)])
 def crm_status():
     from .connectors import crm

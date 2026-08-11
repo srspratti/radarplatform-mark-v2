@@ -4,8 +4,9 @@ import json
 
 import httpx
 
-from radar_hub.connectors.ddf import DDFClient, sweep
-from radar_hub.models import Listing, ListingPhoto
+from radar_hub.connectors.ddf import (DDFClient, _criteria_filter,
+                                      match_criteria, sweep)
+from radar_hub.models import Listing, ListingPhoto, PortalKV
 
 T = "danny"
 _JPEG = b"\xff\xd8\xff\xe0FAKEJPEG"
@@ -20,6 +21,18 @@ _PROPERTY = {"value": [{
 }]}
 
 
+_SEARCH = {"value": [
+    {"ListingId": "20001111", "UnparsedAddress": "12 Rue du Golf",
+     "City": "Mont-Blanc", "ListPrice": 449900, "BedroomsTotal": 3,
+     "BathroomsTotalInteger": 2, "PropertySubType": "Single Family",
+     "ListingURL": "https://www.realtor.ca/real-estate/20001111"},
+    {"ListingId": "20002222", "UnparsedAddress": "8 Ch. des Cimes",
+     "City": "Mont-Blanc", "ListPrice": 512000, "BedroomsTotal": 4,
+     "BathroomsTotalInteger": 2, "PropertySubType": "Bungalow",
+     "ListingURL": ""},
+]}
+
+
 def _transport():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/token"):
@@ -31,6 +44,8 @@ def _transport():
             filt = request.url.params["$filter"]
             if "17004507" in filt:
                 return httpx.Response(200, json=_PROPERTY)
+            if "ListPrice ge" in filt:
+                return httpx.Response(200, json=_SEARCH)
             return httpx.Response(200, json={"value": []})
         if request.url.host == "ddf.media":
             return httpx.Response(200, content=_JPEG)
@@ -76,6 +91,41 @@ def test_ddf_unconfigured_is_dormant(client):
     assert r["enriched"] == 0 and "DDF" in r["error"]
     s = client.get("/api/connectors/ddf/status").json()
     assert s["configured"] is False
+
+
+def test_ddf_match_criteria_fills_portals(client, db):
+    """The licensed criteria sweep: each client's saved Vitrine prefs run
+    against the DDF® pool; matches land in their inventory, deduped."""
+    lead = client.post("/api/leads", json={"name": "Criteria Client",
+                                           "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    db.add(PortalKV(tenant_id=T, token=c["portal_token"],
+                    key="vitrine2_prefs",
+                    value=json.dumps({"p": {
+                        "pmin": 400000, "pmax": 650000, "beds": 3,
+                        "areas": ["Mont-Blanc", "Val-d'Or"]}})))
+    db.commit()
+    r = match_criteria(db, T, _client())
+    assert r["clients"] == 1 and r["matched"] == 2 and r["new"] == 2
+    rows = (db.query(Listing)
+            .filter_by(tenant_id=T, contact_id=c["id"]).all())
+    assert {x.centris_no for x in rows} == {"20001111", "20002222"}
+    hit = next(x for x in rows if x.centris_no == "20001111")
+    assert hit.price == 449900 and hit.beds == 3
+    assert "realtor.ca" in hit.url
+    # second run: same pool → all dups, nothing new
+    r2 = match_criteria(db, T, _client())
+    assert r2["matched"] == 2 and r2["new"] == 0
+    # OData filter shape (quote-escaping for areas like Val-d'Or)
+    f = _criteria_filter({"pmin": 400000, "pmax": 650000, "beds": 3,
+                          "areas": ["Val-d'Or"]})
+    assert "ListPrice ge 400000" in f and "ListPrice le 650000" in f
+    assert "BedroomsTotal ge 3" in f and "contains(City,'Val-d''Or')" in f
+
+
+def test_ddf_match_unconfigured_is_dormant(client):
+    r = client.post("/api/connectors/ddf/match").json()
+    assert r["clients"] == 0 and "DDF" in r["error"]
 
 
 def test_browser_printed_portal_page_numbers_only(client, db):

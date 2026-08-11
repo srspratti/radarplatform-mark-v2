@@ -66,6 +66,15 @@ class DDFClient:
             rows = r.json().get("value", [])
             return rows[0] if rows else None
 
+    def search_properties(self, filters: str, top: int = 20) -> list[dict]:
+        """OData $filter query against the licensed pool."""
+        with self._client() as c:
+            r = c.get(f"{self.base}/Property",
+                      params={"$filter": filters, "$top": top},
+                      headers={"Authorization": f"Bearer {self._auth()}"})
+            r.raise_for_status()
+            return r.json().get("value", [])
+
     def fetch_media(self, url: str) -> bytes | None:
         with self._client() as c:
             r = c.get(url, headers={"Authorization": f"Bearer {self._auth()}"})
@@ -130,6 +139,75 @@ def enrich_listing(db: Session, tenant_id: str, row: Listing,
         if added:
             db.commit()
     return True
+
+
+def _criteria_filter(p: dict) -> str:
+    """Vitrine saved criteria ("Mes alertes") → OData filter. Conservative:
+    price + bedrooms always; areas as City contains-any when present.
+    Tune the field names here if CREA's payload uses different casing."""
+    parts = [f"ListPrice ge {int(p.get('pmin', 0))}",
+             f"ListPrice le {int(p.get('pmax', 10_000_000))}"]
+    if beds := int(p.get("beds", 0) or 0):
+        parts.append(f"BedroomsTotal ge {beds}")
+    areas = [a.replace("'", "''") for a in (p.get("areas") or [])][:6]
+    if areas:
+        parts.append("(" + " or ".join(
+            f"contains(City,'{a}')" for a in areas) + ")")
+    return " and ".join(parts)
+
+
+def match_criteria(db: Session, tenant_id: str,
+                   client: DDFClient | None = None, top: int = 20) -> dict:
+    """The fully-licensed replacement for reading the Matrix portal page:
+    run each client's saved Vitrine criteria against the DDF® pool and file
+    the matches straight into their inventory (deduped, alert-mailer
+    mirrored, enriched — the normal listing pipeline)."""
+    import json as _json
+
+    from ..models import Contact, PortalKV
+    from .matrix_email import store_listings
+
+    client = client or DDFClient()
+    if not client.configured:
+        return {"clients": 0, "error": "DDF non configuré (DDF_CLIENT_ID/SECRET)"}
+    out: dict = {"clients": 0, "matched": 0, "new": 0, "details": []}
+    rows = (db.query(Contact)
+            .filter(Contact.tenant_id == tenant_id,
+                    Contact.lifecycle == "client",
+                    Contact.portal_token != "").all())
+    for c in rows:
+        kv = (db.query(PortalKV)
+              .filter_by(tenant_id=tenant_id, token=c.portal_token,
+                         key="vitrine2_prefs").first())
+        if not kv:
+            continue
+        try:
+            prefs = _json.loads(kv.value).get("p") or {}
+        except (ValueError, AttributeError):
+            continue
+        out["clients"] += 1
+        try:
+            found = client.search_properties(_criteria_filter(prefs), top=top)
+        except httpx.HTTPError as exc:
+            out["details"].append({"client": c.name, "error": str(exc)[:120]})
+            continue
+        cards = [{
+            "centris_no": str(p.get("ListingId", "")),
+            "address": (p.get("UnparsedAddress") or "")[:290],
+            "area": (p.get("City") or "")[:190],
+            "price": _num(p.get("ListPrice")) or 0,
+            "beds": _num(p.get("BedroomsTotal")) or 0,
+            "baths": _num(p.get("BathroomsTotalInteger")) or 0,
+            "prop_type": (p.get("PropertySubType") or "")[:120],
+            "url": (p.get("ListingURL") or "")[:500],
+        } for p in found if p.get("ListingId")]
+        r = store_listings(db, tenant_id, c, cards,
+                           raw_id=f"ddfmatch-{c.id}")
+        out["matched"] += len(cards)
+        out["new"] += r["listings_new"]
+        out["details"].append({"client": c.name, "matched": len(cards),
+                               "new": r["listings_new"]})
+    return out
 
 
 def sweep(db: Session, tenant_id: str,
