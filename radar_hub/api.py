@@ -1778,8 +1778,11 @@ def farming_report(body: FarmIn, db: Session = Depends(get_db),
 def messaging_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
     _require("messaging_sync")
     q = db.query(OutboundMessage).filter_by(tenant_id=t)
-    return {"provider_configured": bool(settings.TWILIO_SID),
-            "provider": "twilio" if settings.TWILIO_SID else "aucun (mode simulation)",
+    ghl_sms = bool(settings.GHL_API_KEY and settings.GHL_LOCATION_ID)
+    return {"provider_configured": bool(settings.TWILIO_SID or ghl_sms),
+            "provider": ("twilio" if settings.TWILIO_SID
+                         else "gohighlevel (LC Phone — SMS seulement)"
+                         if ghl_sms else "aucun (mode simulation)"),
             "queued": q.filter_by(status="pending").count(),
             "simulated": q.filter_by(status="simulated").count(),
             "sent": q.filter_by(status="sent").count()}

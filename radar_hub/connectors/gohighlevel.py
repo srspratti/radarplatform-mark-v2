@@ -56,6 +56,36 @@ class GHLClient:
             r.raise_for_status()
             return r.json()
 
+    def upsert_contact(self, name: str = "", phone: str = "",
+                       email: str = "") -> str:
+        """Find-or-create by phone/email; returns the GHL contact id.
+        Needs the *Edit Contacts* scope on the Private Integration token."""
+        payload: dict = {"locationId": self.location_id}
+        if name:
+            payload["name"] = name
+        if phone:
+            payload["phone"] = phone
+        if email:
+            payload["email"] = email
+        with self._client() as c:
+            r = c.post(f"{self.base}/contacts/upsert", json=payload)
+            r.raise_for_status()
+            return str((r.json().get("contact") or {}).get("id", ""))
+
+    def send_sms(self, contact_id: str, message: str) -> str:
+        """Outbound SMS through GHL's LC Phone (Twilio resold inside the GHL
+        subscription). Prerequisites, both in the GHL UI: a phone number on
+        the sub-account (Settings → Phone Numbers, Canadian 514/438 available
+        without a separate Twilio account) and the *conversations/message
+        write* scope on the Private Integration token."""
+        with self._client() as c:
+            r = c.post(f"{self.base}/conversations/messages",
+                       json={"type": "SMS", "contactId": contact_id,
+                             "message": message})
+            r.raise_for_status()
+            j = r.json()
+            return str(j.get("messageId") or j.get("conversationId") or "ok")
+
 
 def import_from_ghl(db: Session, tenant_id: str, client: GHLClient,
                     limit: int = 100) -> dict:

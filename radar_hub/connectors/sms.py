@@ -1,9 +1,13 @@
 """Outbound SMS/WhatsApp dispatch — Twilio REST over httpx (already a dep).
 
-Dev mode (no TWILIO_SID): every send returns "simulated" so the queue and the
-ops console show exactly what WOULD have gone out, with a tap-to-send sms:
-fallback the realtor can fire from their own phone. Nothing here ever raises
-into a webhook or intake pipeline — failures become status "failed".
+Provider ladder for SMS: Twilio when TWILIO_* is set, else GoHighLevel's
+LC Phone when GHL_* is set (Twilio resold inside the GHL subscription — the
+message lands in the GHL conversation thread too), else "simulated" so the
+queue and the ops console show exactly what WOULD have gone out, with a
+tap-to-send sms: fallback the realtor can fire from their own phone.
+WhatsApp and voice are Twilio-only (GHL's API has no raw call control).
+Nothing here ever raises into a webhook or intake pipeline — failures
+become status "failed".
 """
 from __future__ import annotations
 import re
@@ -51,6 +55,35 @@ def send_sms(to: str, body: str, whatsapp: bool = False) -> tuple[str, str]:
         return "failed", str(exc)[:120]
 
 
+def send_sms_ghl(db: Session, msg: OutboundMessage,
+                 client=None) -> tuple[str, str]:
+    """SMS through GHL's LC Phone: upsert the contact by phone (so the thread
+    lives in the broker's GHL inbox), remember its id, send. Never raises."""
+    from ..models import Contact
+    from .gohighlevel import GHLClient
+    client = client or GHLClient()
+    if not client.configured:
+        return "simulated", ""
+    to = normalize_phone(msg.to_addr)
+    if not to:
+        return "failed", "numéro invalide"
+    contact = db.get(Contact, msg.contact_id)
+    try:
+        gid = contact.ghl_contact_id if contact else ""
+        if not gid:
+            gid = client.upsert_contact(
+                name=contact.name if contact else "",
+                phone=to, email=contact.email if contact else "")
+            if contact and gid:
+                contact.ghl_contact_id = gid
+                db.commit()
+        if not gid:
+            return "failed", "ghl: contact introuvable"
+        return "sent", f"ghl {client.send_sms(gid, msg.body)}"
+    except Exception as exc:  # noqa: BLE001 — transport errors must not propagate
+        return "failed", f"ghl: {exc}"[:120]
+
+
 def dispatch(db: Session, msg: OutboundMessage) -> OutboundMessage:
     """Best-effort transport for one queued message; updates status in place."""
     if msg.status not in ("pending", "simulated"):
@@ -58,6 +91,8 @@ def dispatch(db: Session, msg: OutboundMessage) -> OutboundMessage:
     if msg.channel in ("sms", "whatsapp"):
         status, _detail = send_sms(msg.to_addr, msg.body,
                                    whatsapp=msg.channel == "whatsapp")
+        if status == "simulated" and msg.channel == "sms":
+            status, _detail = send_sms_ghl(db, msg)
     elif msg.channel == "email":
         from ..mailer import send_email
         status = send_email(msg.to_addr, msg.purpose or "Radar Hub", msg.body)

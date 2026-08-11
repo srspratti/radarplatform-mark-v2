@@ -19,7 +19,7 @@ _PEOPLE = {"contacts": [
 ]}
 
 
-def _transport(notes_log):
+def _transport(notes_log, sms_log=None):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer pit-test"
         assert request.headers["Version"] == "2021-07-28"
@@ -30,14 +30,25 @@ def _transport(notes_log):
             notes_log.append((request.url.path.split("/")[2],
                               json.loads(request.content)["body"]))
             return httpx.Response(201, json={"id": "note-1"})
+        if request.url.path == "/contacts/upsert" and request.method == "POST":
+            body = json.loads(request.content)
+            assert body["locationId"] == "loc-1" and body.get("phone")
+            return httpx.Response(200, json={"contact": {"id": "ghl-up-1"}})
+        if (request.url.path == "/conversations/messages"
+                and request.method == "POST"):
+            body = json.loads(request.content)
+            assert body["type"] == "SMS"
+            (sms_log if sms_log is not None else []).append(
+                (body["contactId"], body["message"]))
+            return httpx.Response(201, json={"messageId": "msg-1"})
         return httpx.Response(404)
     return httpx.MockTransport(handler)
 
 
-def _client(notes_log=None):
+def _client(notes_log=None, sms_log=None):
     return GHLClient(api_key="pit-test", location_id="loc-1",
                      transport=_transport(notes_log if notes_log is not None
-                                          else []))
+                                          else [], sms_log))
 
 
 def test_ghl_import_idempotent_with_sublabels(db):
@@ -73,3 +84,32 @@ def test_ghl_writeback_flush(db):
 def test_ghl_unconfigured_reports_cleanly(db):
     r = import_from_ghl(db, T, GHLClient(api_key="", location_id=""))
     assert r["imported"] == 0 and "GHL" in r["error"]
+
+
+def test_ghl_sms_transport(db):
+    """No Twilio, GHL configured → SMS rides LC Phone: contact upserted by
+    phone (id remembered), message posted to the conversations API."""
+    from radar_hub.connectors.sms import send_sms_ghl
+    from radar_hub.models import OutboundMessage
+    c = Contact(tenant_id=T, name="Sans GHL", phone="514 555 0777",
+                source="own_generated")
+    db.add(c)
+    db.commit()
+    m = OutboundMessage(tenant_id=T, contact_id=c.id, channel="sms",
+                        to_addr=c.phone, body="Bonjour! Visite demain?",
+                        purpose="auto_ack", status="pending")
+    db.add(m)
+    db.commit()
+    sms_log = []
+    status, detail = send_sms_ghl(db, m, _client(sms_log=sms_log))
+    assert status == "sent" and detail == "ghl msg-1"
+    assert sms_log == [("ghl-up-1", "Bonjour! Visite demain?")]
+    db.refresh(c)
+    assert c.ghl_contact_id == "ghl-up-1"  # thread now lives in GHL
+    # second send reuses the stored id (no second upsert)
+    sms_log2 = []
+    status2, _ = send_sms_ghl(db, m, _client(sms_log=sms_log2))
+    assert status2 == "sent" and sms_log2 == [("ghl-up-1", m.body)]
+    # unconfigured client → falls back to simulated, never raises
+    assert send_sms_ghl(db, m, GHLClient(api_key="", location_id=""))[0] \
+        == "simulated"

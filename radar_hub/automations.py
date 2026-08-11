@@ -37,11 +37,14 @@ def queue_msg(db: Session, t: str, c: Contact, channel: str, body: str,
               purpose: str) -> OutboundMessage:
     """Queue + best-effort immediate dispatch. In dev mode (simulated) the
     realtor gets a notification with a tap-to-send sms: fallback."""
+    ghl_sms = bool(settings.GHL_API_KEY and settings.GHL_LOCATION_ID)
+    live = bool(settings.TWILIO_SID or (channel == "sms" and ghl_sms)
+                or (channel == "email" and settings.SMTP_HOST))
     m = OutboundMessage(tenant_id=t, contact_id=c.id, channel=channel,
                         to_addr=c.phone if channel in ("sms", "whatsapp")
                                 else c.email,
                         body=body, purpose=purpose,
-                        status="pending" if settings.TWILIO_SID else "simulated")
+                        status="pending" if live else "simulated")
     db.add(m)
     db.commit()
     from .connectors import sms
