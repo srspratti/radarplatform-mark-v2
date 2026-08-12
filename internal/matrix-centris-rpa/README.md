@@ -46,3 +46,36 @@ Les sélecteurs `PLACEHOLDER_…` doivent être remplis contre le DOM réel
 (DevTools → clic droit sur l'élément → Copy selector) — ils varient selon la
 configuration du tableau. Cadence humaine intégrée (pauses aléatoires);
 gardez les exécutions rares (1-2×/jour max.).
+
+## Le watcher de liens de portail — ingestion courriel complète / complete email ingestion
+
+🇫🇷 `portal_link_watcher.py` ferme la boucle des tableaux « lien seulement »
+sans AUCUN clic humain : le hub met en file le lien « View All Listings » de
+chaque auto-courriel vide (`GET /api/connectors/matrix/link-queue`); le
+watcher ouvre chaque lien dans Chromium (session anonyme — le lien courriel
+se rend sans connexion; si une connexion est demandée, la tâche est marquée
+`failed`, jamais forcée), relève les numéros Centris de la page rendue, et
+les POSTe à `ingest-numbers`. La substance (année, taxes, pièces, photos)
+vient ensuite du flux DDF® licencié ou d'un PDF détaillé. Aucun sélecteur à
+remplir — l'extraction est textuelle.
+
+🇬🇧 `portal_link_watcher.py` closes the link-only-board loop with ZERO human
+clicks: the hub queues each empty auto-email's "View All Listings" link; the
+watcher opens each one in Chromium (anonymous session — the emailed link
+renders without login; if a login is demanded the task is marked `failed`,
+never forced), lifts the Centris numbers from the rendered page and POSTs
+them to `ingest-numbers`. Substance (year, taxes, rooms, photos) then comes
+from the licensed DDF® feed or a detailed PDF. No selectors to fill — the
+extraction is text-based.
+
+```bash
+python portal_link_watcher.py --hub http://localhost:8000 --key $RADAR_API_KEY          # dry-run
+python portal_link_watcher.py --hub http://localhost:8000 --key $RADAR_API_KEY --apply  # pour vrai / for real
+# --limit 5 (défaut) · --headed pour voir la fenêtre / to watch the browser
+```
+
+Mêmes règles que le reste du dossier : édition interne seulement, compte et
+courriels du courtier seulement, cadence humaine, jamais conteneurisé ni
+distribué. / Same rules as the rest of this folder: internal edition only,
+the broker's own account and emails only, human-paced, never containerized
+or distributed.

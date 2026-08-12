@@ -206,6 +206,12 @@ playwright install chromium
    add `--apply` only after selectors are filled and a manual spot-check.
 4. Keep runs low-frequency and human-paced (built in). Never containerize or
    distribute this folder — `.dockerignore` already fences it.
+5. **Complete email ingestion (link-only boards)**: the hub queues every
+   empty auto-email's portal link (`GET /api/connectors/matrix/link-queue`);
+   `portal_link_watcher.py` opens each link (anonymous session, no login
+   ever automated), lifts the Centris numbers from the rendered page and
+   posts them back — enrichment then comes from DDF®/detailed PDFs. Dry-run
+   by default; see the folder README.
 
 ## 6 · Deploying (Fly.io, YUL)
 

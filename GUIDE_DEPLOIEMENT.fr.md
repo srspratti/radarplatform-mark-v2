@@ -200,6 +200,13 @@ playwright install chromium
    manuelle.
 4. Fréquence basse, cadence humaine (intégrée). Ne jamais conteneuriser ni
    distribuer ce dossier — `.dockerignore` le clôture déjà.
+5. **Ingestion courriel complète (tableaux « lien seulement »)** : le hub met
+   en file le lien de portail de chaque auto-courriel vide
+   (`GET /api/connectors/matrix/link-queue`) ;
+   `portal_link_watcher.py` ouvre chaque lien (session anonyme, connexion
+   jamais automatisée), relève les numéros Centris de la page rendue et les
+   renvoie au hub — l'enrichissement vient ensuite du DDF®/PDF détaillés.
+   Dry-run par défaut ; voir le README du dossier.
 
 ## 6 · Déploiement (Fly.io, YUL)
 

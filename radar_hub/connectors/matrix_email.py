@@ -336,6 +336,32 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
             "alert_email": alert_status}
 
 
+_RX_PORTAL_URL = re.compile(
+    r"https?://[^\s\"'<>\]]*(?:matrix\.centris\.ca|/Matrix/Public/Portal\.aspx)"
+    r"[^\s\"'<>\]]*", re.I)
+
+
+def _queue_portal_link(db: Session, tenant_id: str, contact: Contact,
+                       raw: str) -> bool:
+    """Remember the auto-email's portal URL in the link queue (passive
+    metadata — the hub NEVER fetches it). Skips if an identical link is
+    already pending for this client; a fresh email after completion
+    re-queues, since the same URL carries the new listings."""
+    from ..models import MatrixLinkTask
+    m = _RX_PORTAL_URL.search(raw)
+    if not m:
+        return False
+    url = m.group(0).rstrip(".,)>")[:500]
+    if (db.query(MatrixLinkTask)
+            .filter_by(tenant_id=tenant_id, contact_id=contact.id,
+                       url=url, status="pending").first()):
+        return False
+    db.add(MatrixLinkTask(tenant_id=tenant_id, contact_id=contact.id,
+                          url=url))
+    db.commit()
+    return True
+
+
 def process_raw_email(db: Session, tenant_id: str, raw: str,
                       raw_id: str = "",
                       pdf_attachments: list[bytes] | None = None) -> dict:
@@ -376,9 +402,16 @@ def process_raw_email(db: Session, tenant_id: str, raw: str,
                     except ValueError:
                         continue
             pdf_rows = len(cards)
+    link_queued = False
+    if not cards and contact:
+        # Still nothing? Remember the portal link ("View All Listings") in
+        # the link queue. The hub never opens it — a human does (marketable),
+        # or the internal-edition watcher does (broker's own judgment call).
+        link_queued = _queue_portal_link(db, tenant_id, contact, raw)
     parsed = parse_matrix_email(raw)
     out: dict = {"routed_by_intake": bool(contact),
                  "pdf_listings": pdf_rows,
+                 "link_queued": link_queued,
                  "parsed": {"kind": parsed.kind,
                             "confidence": parsed.confidence,
                             "name": parsed.name,

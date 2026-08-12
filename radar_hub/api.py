@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import (ConsentRecord, Contact, ContentItem, Event, Expense,
                      FollowUp, GeoCache, LedgerEntry, Listing, ListingPhoto,
-                     NotificationItem, OutboundMessage, PortalKV,
-                     ProspectCandidate, SellerProspect, WritebackItem,
-                     get_db, utcnow)
+                     MatrixLinkTask, NotificationItem, OutboundMessage,
+                     PortalKV, ProspectCandidate, SellerProspect,
+                     WritebackItem, get_db, utcnow)
 from .events import ingest_event, FAMILIES
 from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
@@ -437,6 +437,88 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
               else f"pdf-{utcnow():%Y%m%d%H%M%S}")
     out = mx.store_listings(db, t, c, cards, raw_id=raw_id)
     return {"parsed_rows": len(cards), **out}
+
+
+@router.get("/connectors/matrix/link-queue", dependencies=[Depends(auth)])
+def matrix_link_queue(status: str = "pending",
+                      db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Portal links remembered from link-only auto-emails. The hub never
+    opens them: a human does (marketable), or the internal-edition watcher
+    (internal/matrix-centris-rpa/portal_link_watcher.py) works the queue."""
+    rows = (db.query(MatrixLinkTask)
+            .filter_by(tenant_id=t, status=status)
+            .order_by(MatrixLinkTask.created_at).limit(200).all())
+    out = []
+    for r in rows:
+        c = db.get(Contact, r.contact_id)
+        out.append({"id": r.id, "contact_id": r.contact_id,
+                    "client": c.name if c else "?", "url": r.url,
+                    "status": r.status, "note": r.note,
+                    "created_at": r.created_at.isoformat()})
+    return out
+
+
+class LinkTaskIn(BaseModel):
+    status: str = "done"   # done|failed|pending
+    note: str = ""
+
+
+@router.post("/connectors/matrix/link-queue/{task_id}",
+             dependencies=[Depends(auth)])
+def matrix_link_mark(task_id: int, body: LinkTaskIn,
+                     db: Session = Depends(get_db), t: str = Depends(tenant)):
+    r = db.get(MatrixLinkTask, task_id)
+    if not r or r.tenant_id != t:
+        raise HTTPException(404, "tâche introuvable")
+    if body.status not in ("done", "failed", "pending"):
+        raise HTTPException(422, "status: done | failed | pending")
+    r.status, r.note = body.status, body.note[:290]
+    r.done_at = utcnow() if body.status == "done" else None
+    db.commit()
+    return {"id": r.id, "status": r.status}
+
+
+class NumbersIn(BaseModel):
+    contact_id: int
+    numbers: list[str]
+    source: str = ""      # provenance note, e.g. "portal_link_watcher"
+
+
+@router.post("/connectors/matrix/ingest-numbers", dependencies=[Depends(auth)])
+def matrix_ingest_numbers(body: NumbersIn, db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    """Centris numbers straight in (no PDF): stub listings for one client,
+    substance from the licensed DDF® feed or a detailed PDF. Same contract as
+    ingest-pdf's numbers mode — deduped, re-postable at will."""
+    import re as _re
+    c = db.get(Contact, body.contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    numbers = []
+    for n in body.numbers[:200]:
+        digits = _re.sub(r"\D", "", str(n))
+        if 7 <= len(digits) <= 8 and digits not in numbers:
+            numbers.append(digits)
+    if not numbers:
+        raise HTTPException(422, "aucun numéro Centris valide (7-8 chiffres)")
+    created = dup = 0
+    for no in numbers:
+        if (db.query(Listing)
+                .filter_by(tenant_id=t, contact_id=c.id,
+                           centris_no=no).first()):
+            dup += 1
+            continue
+        db.add(Listing(tenant_id=t, contact_id=c.id, centris_no=no))
+        created += 1
+    db.commit()
+    ddf_result = None
+    if settings.DDF_CLIENT_ID:
+        from .connectors import ddf
+        ddf_result = ddf.sweep(db, t)
+    return {"mode": "numbers", "parsed_rows": len(numbers),
+            "listings_new": created, "listings_dup": dup, "ddf": ddf_result,
+            "note": "identifiants seulement — enrichir via DDF® ou un PDF "
+                    "détaillé"}
 
 
 # ---------------------------------------------------------------- webhooks --

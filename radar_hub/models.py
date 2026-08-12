@@ -284,6 +284,23 @@ class NotificationItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
+class MatrixLinkTask(Base):
+    """Link-only Matrix auto-emails: the portal URL the email pointed at,
+    remembered per client. Marketable edition: a human opens the link (their
+    own email, ordinary use) and prints/imports. Internal edition:
+    internal/matrix-centris-rpa/portal_link_watcher.py consumes this queue.
+    The hub itself NEVER fetches these URLs."""
+    __tablename__ = "matrix_link_tasks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    url: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)  # pending|done|failed
+    note: Mapped[str] = mapped_column(String(290), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ConsentRecord(Base):
     """Loi 25 / LCAP audit trail — one row per consent fact, never updated,
     only appended (revocations are new rows with granted=False)."""
