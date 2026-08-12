@@ -45,29 +45,49 @@ class FUBClient:
             return r.json()
 
 
+def _refresh_identity(contact: Contact, name: str, email: str,
+                      phone: str) -> bool:
+    """Mirror CRM-side edits to identity fields onto the hub copy (the CRM
+    stays the system of record). Empty CRM values never erase hub data."""
+    changed = False
+    for field, val in (("name", name), ("email", email), ("phone", phone)):
+        if val and val != "Sans nom" and getattr(contact, field) != val:
+            setattr(contact, field, val)
+            changed = True
+    return changed
+
+
 def import_from_fub(db: Session, tenant_id: str, client: FUBClient,
                     limit: int = 100) -> dict:
     if not client.configured:
         return {"imported": 0, "skipped": 0,
                 "error": "FUB_API_KEY non configurée"}
     people = client.list_people(limit=limit)
-    imported = skipped = 0
+    imported = updated = skipped = 0
     for p in people:
         pid = str(p.get("id", ""))
         if not pid:
             continue
+        emails = p.get("emails") or []
+        phones = p.get("phones") or []
+        name = (p.get("name")
+                or f"{p.get('firstName','')} {p.get('lastName','')}".strip()
+                or "Sans nom")
+        email = (emails[0].get("value") if emails else "") or ""
+        phone = (phones[0].get("value") if phones else "") or ""
         existing = (db.query(Contact)
                     .filter_by(tenant_id=tenant_id, fub_person_id=pid).first())
         if existing:
-            skipped += 1
+            # CRM is the system of record for identity fields — edits there
+            # (a corrected phone, a new email) refresh the hub copy on sync.
+            if _refresh_identity(existing, name, email, phone):
+                db.commit()
+                updated += 1
+            else:
+                skipped += 1
             continue
-        emails = p.get("emails") or []
-        phones = p.get("phones") or []
         contact = Contact(
-            tenant_id=tenant_id,
-            name=p.get("name") or f"{p.get('firstName','')} {p.get('lastName','')}".strip() or "Sans nom",
-            email=(emails[0].get("value") if emails else "") or "",
-            phone=(phones[0].get("value") if phones else "") or "",
+            tenant_id=tenant_id, name=name, email=email, phone=phone,
             source="fub_import",
             sublabel=p.get("source") or "FUB",
             notes=p.get("background") or "",
@@ -81,7 +101,7 @@ def import_from_fub(db: Session, tenant_id: str, client: FUBClient,
                      idempotency_key=f"fub-capture-{pid}")
         refresh_priority(db, contact)
         imported += 1
-    return {"imported": imported, "skipped": skipped}
+    return {"imported": imported, "updated": updated, "skipped": skipped}
 
 
 def flush_writebacks(db: Session, tenant_id: str,

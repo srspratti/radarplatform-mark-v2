@@ -54,8 +54,8 @@ def _client(notes_log=None, sms_log=None):
 def test_ghl_import_idempotent_with_sublabels(db):
     r1 = import_from_ghl(db, T, _client())
     r2 = import_from_ghl(db, T, _client())
-    assert r1 == {"imported": 2, "skipped": 0}
-    assert r2 == {"imported": 0, "skipped": 2}
+    assert r1 == {"imported": 2, "updated": 0, "skipped": 0}
+    assert r2 == {"imported": 0, "updated": 0, "skipped": 2}
     lucie = db.query(Contact).filter_by(ghl_contact_id="ghl-001").one()
     assert lucie.source == "ghl_import"
     assert lucie.sublabel == "Facebook Funnel"

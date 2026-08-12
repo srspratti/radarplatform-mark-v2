@@ -96,11 +96,39 @@ def test_fub_import_idempotent_with_sublabels(db):
     fub = FUBClient(api_key="test-key", transport=_fub_transport())
     r1 = import_from_fub(db, T, fub)
     r2 = import_from_fub(db, T, fub)
-    assert r1 == {"imported": 2, "skipped": 0}
-    assert r2 == {"imported": 0, "skipped": 2}
+    assert r1 == {"imported": 2, "updated": 0, "skipped": 0}
+    assert r2 == {"imported": 0, "updated": 0, "skipped": 2}
     karim = db.query(Contact).filter_by(fub_person_id="88231").one()
     assert karim.source == "fub_import" and karim.sublabel == "Zillow"
     assert karim.priority_score > 0
+
+
+def test_fub_resync_refreshes_crm_edits(db):
+    """Phone corrected in the CRM → next sync mirrors it onto the hub copy
+    (CRM = system of record for identity fields); empty CRM values never
+    erase hub data."""
+    fub = FUBClient(api_key="test-key", transport=_fub_transport())
+    import_from_fub(db, T, fub)
+    karim = db.query(Contact).filter_by(fub_person_id="88231").one()
+    assert karim.phone == "438-555-0177"
+    edited = {"people": [
+        {"id": 88231, "name": "Karim Bensalem", "source": "Zillow",
+         "emails": [{"value": "k@example.com"}],
+         "phones": [{"value": "+15142102448"}]},   # fixed in FUB
+        {"id": 90114, "name": "Nadia Petrov", "source": "Realtor.ca",
+         "emails": [], "phones": []},               # blanks: no clobber
+    ]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=edited)
+    fub2 = FUBClient(api_key="test-key",
+                     transport=httpx.MockTransport(handler))
+    r = import_from_fub(db, T, fub2)
+    assert r == {"imported": 0, "updated": 1, "skipped": 1}
+    db.refresh(karim)
+    assert karim.phone == "+15142102448"
+    nadia = db.query(Contact).filter_by(fub_person_id="90114").one()
+    assert nadia.email == "n@example.com"  # untouched by empty CRM fields
 
 
 def test_fub_writeback_flush(db):

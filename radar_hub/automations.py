@@ -41,7 +41,8 @@ def queue_msg(db: Session, t: str, c: Contact, channel: str, body: str,
     live = bool(settings.TWILIO_SID or (channel == "sms" and ghl_sms)
                 or (channel == "email" and settings.SMTP_HOST))
     m = OutboundMessage(tenant_id=t, contact_id=c.id, channel=channel,
-                        to_addr=c.phone if channel in ("sms", "whatsapp")
+                        to_addr=c.phone if channel in ("sms", "whatsapp",
+                                                       "voice")
                                 else c.email,
                         body=body, purpose=purpose,
                         status="pending" if live else "simulated")

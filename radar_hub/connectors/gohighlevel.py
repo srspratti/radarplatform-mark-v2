@@ -92,18 +92,25 @@ def import_from_ghl(db: Session, tenant_id: str, client: GHLClient,
     if not client.configured:
         return {"imported": 0, "skipped": 0,
                 "error": "GHL non configuré (GHL_API_KEY + GHL_LOCATION_ID)"}
-    imported = skipped = 0
+    from .fub import _refresh_identity
+    imported = updated = skipped = 0
     for p in client.list_contacts(limit=limit):
         cid = str(p.get("id", ""))
         if not cid:
             continue
-        if (db.query(Contact)
-                .filter_by(tenant_id=tenant_id, ghl_contact_id=cid).first()):
-            skipped += 1
-            continue
         name = (p.get("contactName")
                 or f"{p.get('firstName', '')} {p.get('lastName', '')}".strip()
                 or "Sans nom")
+        existing = (db.query(Contact)
+                    .filter_by(tenant_id=tenant_id, ghl_contact_id=cid).first())
+        if existing:
+            if _refresh_identity(existing, name, p.get("email") or "",
+                                 p.get("phone") or ""):
+                db.commit()
+                updated += 1
+            else:
+                skipped += 1
+            continue
         tags = p.get("tags") or []
         contact = Contact(
             tenant_id=tenant_id, name=name,
@@ -123,7 +130,7 @@ def import_from_ghl(db: Session, tenant_id: str, client: GHLClient,
                      idempotency_key=f"ghl-capture-{cid}")
         refresh_priority(db, contact)
         imported += 1
-    return {"imported": imported, "skipped": skipped}
+    return {"imported": imported, "updated": updated, "skipped": skipped}
 
 
 def flush_writebacks_ghl(db: Session, tenant_id: str,
