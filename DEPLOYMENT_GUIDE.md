@@ -216,9 +216,15 @@ fly launch --copy-config --no-deploy        # keeps the shipped fly.toml
 fly volumes create radar_data --size 1 --region yul
 fly secrets set \
   RADAR_API_KEY=… ANTHROPIC_API_KEY=… FUB_API_KEY=… \
+  GHL_API_KEY=… GHL_LOCATION_ID=… \
   MATRIX_IMAP_HOST=imap.gmail.com MATRIX_IMAP_USER=… MATRIX_IMAP_PASS=… \
-  INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  INTAKE_EMAIL_MODE=plus INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  TWILIO_SID=… TWILIO_TOKEN=… TWILIO_FROM=… \
+  ELEVENLABS_API_KEY=… ELEVENLABS_VOICE_ID=… \
+  SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=… SMTP_PASS=… SMTP_FROM=… \
+  RADAR_PUBLIC_URL=https://<app>.fly.dev \
   IMAP_HOST=imap.gmail.com IMAP_USER=… IMAP_PASS=…        # [Marketable]
+# add DDF_CLIENT_ID/SECRET when the CREA DDF® credentials arrive
 fly deploy
 fly logs            # watch first boot: it seeds the empty volume, then serves
 fly open            # dashboard at /, ops at /ops

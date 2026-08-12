@@ -95,9 +95,14 @@ sed -i.bak "s/REPLACE_WITH_CLIENT_INTAKE_EMAIL/<coller-son-adresse>/" samples/ma
 | `RADAR_API_KEY` | Verrouille l'API du hub (`X-Radar-Key`) | `openssl rand -hex 24` |
 | `ANTHROPIC_API_KEY` | Concierge Vitrine + prévisions (recherche web), parseur Haiku sous seuil, synthèse de rapport, brouillons d'approche/contenu | console.anthropic.com → API Keys |
 | `FUB_API_KEY` | Import Follow Up Boss + writeback de notes | FUB → Admin → API → Créer une clé |
+| `GHL_API_KEY`, `GHL_LOCATION_ID` | Import GoHighLevel + writeback de notes (même contrat que FUB) — **et transport SMS quand Twilio n'est pas défini** : les SMS sortants passent par LC Phone de GHL (Twilio revendu dans l'abonnement, numéros canadiens sans compte Twilio ; les fils arrivent aussi dans la boîte GHL). Les appels vocaux restent Twilio-seulement. | Sous-compte GHL → Settings → **Private Integrations** → jeton avec scopes *View/Edit Contacts* + *Conversations/Messages* ; location id = id du sous-compte (Settings → Business Profile). Pour les SMS : acheter un numéro sous Settings → **Phone Numbers** |
+| `DDF_CLIENT_ID/SECRET` | Enrichissement d'inscriptions **licencié** par nº MLS (faits + photos, auto-appliqué à chaque inscription d'alerte) + balayage par critères | Le courtier demande un flux **DDF®** de l'ACI/CREA (crea.ca → DDF® → pool national, destination « outil de membre ») — l'ACI émet des identifiants OAuth2. Balayages : `POST /api/connectors/ddf/enrich` et `/ddf/match` (à planifier, §7) |
 | `MATRIX_IMAP_HOST/USER/PASS` | Lecture IMAP de la boîte d'alertes par le hub | Gmail : activer 2FA → Sécurité → **Mots de passe d'application** → Mail. Hôte `imap.gmail.com` |
 | `INTAKE_EMAIL_MODE/USER/DOMAIN` | Forme des adresses d'alerte par client | `plus` + le même compte Gmail (défaut) — ou `alias` + domaine fourre-tout |
 | `VITRINE_WEBHOOK_SECRET` | HMAC des webhooks du portail | `openssl rand -hex 24` (même origine = optionnel ; définissez-le quand même) |
+| `TWILIO_SID/TOKEN/FROM` | SMS réels + appels des agents vocaux IA (vide = tout en file « simulated ») | twilio.com → Console → Account SID / Auth token ; acheter un numéro local (514/438) |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | La **voix clonée** du courtier sur les appels IA (vide = `<Say>` fr-CA/en-CA de Twilio) | elevenlabs.io → Profil → clé API (portée « Text to Speech » suffit) ; cloner la voix (~1 min d'audio propre) → copier son Voice ID |
+| `SMTP_HOST/PORT/USER/PASS/FROM` | Courriel sortant (miroir d'alertes traqué, approche vendeur) | Un mot de passe d'application Gmail fonctionne (même technique que l'IMAP) |
 | `DB_PATH` | Sqlite de Radar Acheteur **[Vendable]** | un chemin sur le volume persistant |
 | `IMAP_HOST/USER/PASS`, `ALERT_SENDERS` | Boîte propre au module acheteur **[Vendable]** | même technique de mot de passe d'application |
 | `RADAR_TENANT_ID` | Identité de l'instance (marque blanche = nouvelle valeur) | au choix par déploiement |
@@ -155,7 +160,31 @@ remplit sa propre base ; l'interface vit à `/acheteur`. Miroitez ses signaux
 dans la chronologie unifiée avec `POST /api/connectors/acheteur/sync`
 (à planifier, §7).
 
-### 5.6 Suite RPA **[Interne]** — compte de Danny seulement
+### 5.6 Agents vocaux IA + réceptionniste (Twilio / ElevenLabs)
+1. Définissez `TWILIO_SID/TOKEN/FROM`. Sans eux, tout fonctionne quand même en
+   mode **simulé** : messages/appels en file dans `/ops` → 🤖 Agents → 📞 avec
+   un repli « toucher pour envoyer » — parfait pour tester.
+2. Pour la voix clonée du courtier, définissez `ELEVENLABS_API_KEY` +
+   `ELEVENLABS_VOICE_ID` ; le TwiML `<Play>` alors l'audio synthétisé par le
+   hub depuis `/api/voice/audio/{id}.mp3` (exige un `RADAR_PUBLIC_URL` public).
+3. **Réceptionniste** : dans la console Twilio, pointez le webhook « a call
+   comes in / appel manqué » de votre numéro vers
+   `https://<app>/api/webhooks/voice-inbound?format=twiml` — l'appelant reçoit
+   l'accueil bilingue (français québécois puis anglais), la boîte vocale est
+   retranscrite, le SMS d'excuse part, et une tâche de rappel atterrit dans
+   `/ops`.
+4. Seuils, scripts et messages d'accueil vivent dans `features.toml
+   [settings]` (`voice_*`, `receptionist_*`, `broker_name`).
+
+### 5.7 Intelligence vendeur
+Fonctionne d'emblée avec le fournisseur démo (`/ops` → 🤖 Agents → 🏠).
+Données réelles = brancher le slot `RegistreProvider` (Registre foncier /
+JLR). Les garde-fous de conformité sont appliqués dans le code :
+lettres/scripts d'appel toujours permis, courriel/SMS exigent une base LCAP
+consignée, la voix automatisée exige un consentement **exprès** (règles ADAD
+du CRTC).
+
+### 5.8 Suite RPA **[Interne]** — compte de Danny seulement
 ```bash
 pip install -r internal/matrix-centris-rpa/requirements.txt
 playwright install chromium
@@ -181,9 +210,15 @@ fly launch --copy-config --no-deploy        # conserve le fly.toml livré
 fly volumes create radar_data --size 1 --region yul
 fly secrets set \
   RADAR_API_KEY=… ANTHROPIC_API_KEY=… FUB_API_KEY=… \
+  GHL_API_KEY=… GHL_LOCATION_ID=… \
   MATRIX_IMAP_HOST=imap.gmail.com MATRIX_IMAP_USER=… MATRIX_IMAP_PASS=… \
-  INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  INTAKE_EMAIL_MODE=plus INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  TWILIO_SID=… TWILIO_TOKEN=… TWILIO_FROM=… \
+  ELEVENLABS_API_KEY=… ELEVENLABS_VOICE_ID=… \
+  SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=… SMTP_PASS=… SMTP_FROM=… \
+  RADAR_PUBLIC_URL=https://<app>.fly.dev \
   IMAP_HOST=imap.gmail.com IMAP_USER=… IMAP_PASS=…        # [Vendable]
+# ajoutez DDF_CLIENT_ID/SECRET à l'arrivée des identifiants DDF® de l'ACI
 fly deploy
 fly logs            # premier démarrage : seed du volume vide, puis service
 fly open            # tableau de bord à /, ops à /ops
@@ -206,9 +241,14 @@ N'importe quel cron (serveur, GitHub Actions, ou petite machine Fly) :
 
 ```cron
 */10 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/matrix/poll
-*/15 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/flush-writebacks
-0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/import
+0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/crm/sync   # agnostique CRM : import + writebacks FUB/GHL/…
+0 */4 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/enrich  # enrichissement DDF® licencié (si configuré)
+30 */4 * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/match   # balayage DDF® par critères → remplit les Vitrines depuis les préférences sauvegardées
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Vendable]
+0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
+0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback
+0 11 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/checkins/run  # ai_client_checkin
+0 */2 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/outreach/run  # ai_voice_outreach
 ```
 
 **[Interne]** le rédacteur RPA tourne depuis la machine de Danny, à la
