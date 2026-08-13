@@ -5,7 +5,8 @@ tenant_id is the only structural difference between internal and white-label).
 from __future__ import annotations
 import json
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
+                     HTTPException, Request)
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -298,6 +299,28 @@ def ddf_match(top: int = 20, db: Session = Depends(get_db),
     fully-programmatic, ToS-clean replacement for reading the Matrix portal."""
     from .connectors import ddf
     return ddf.match_criteria(db, t, top=top)
+
+
+@router.post("/connectors/criteria/match", dependencies=[Depends(auth)])
+def criteria_match(top: int = 20, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    """Provider-neutral criteria sweep: every portal client's saved Vitrine
+    criteria run against whichever feed is available (licensed DDF® when
+    configured; the demo generator only if switched on deliberately)."""
+    from .connectors import criteria
+    return criteria.match_criteria(db, t, top=top)
+
+
+@router.get("/connectors/criteria/status", dependencies=[Depends(auth)])
+def criteria_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    from .connectors import criteria
+    prov, err = criteria.auto_provider()
+    n = (db.query(PortalKV)
+         .filter_by(tenant_id=t, key=criteria.PREFS_KEY).count())
+    return {"provider": prov.name if prov else "aucun",
+            "clients_with_criteria": n,
+            "demo": bool(prov and prov.name == "demo"),
+            "error": err or None}
 
 
 @router.get("/connectors/sourceimmo/status", dependencies=[Depends(auth)])
@@ -1342,8 +1365,26 @@ def kv_get(token: str, key: str, db: Session = Depends(get_db)):
     return {"key": key, "value": row.value}
 
 
+def _sweep_criteria_async(tenant_id: str, contact_id: int) -> None:
+    """The client just saved their criteria — match now instead of making
+    them wait for the cron. Runs after the response, on its own session, and
+    never raises into the portal request."""
+    from .connectors import criteria
+    from .models import SessionLocal
+    db = SessionLocal()
+    try:
+        c = db.get(Contact, contact_id)
+        if c:
+            criteria.match_criteria(db, tenant_id, contact=c)
+    except Exception:  # noqa: BLE001 — a portal save must never fail on this
+        pass
+    finally:
+        db.close()
+
+
 @router.put("/vitrine/storage/{token}/{key}")
-def kv_put(token: str, key: str, body: KVIn, db: Session = Depends(get_db)):
+def kv_put(token: str, key: str, body: KVIn, background: BackgroundTasks,
+           db: Session = Depends(get_db)):
     c = _contact_by_token(db, token)
     row = (db.query(PortalKV)
            .filter_by(tenant_id=c.tenant_id, token=token, key=key).first())
@@ -1353,6 +1394,8 @@ def kv_put(token: str, key: str, body: KVIn, db: Session = Depends(get_db)):
         db.add(PortalKV(tenant_id=c.tenant_id, token=token, key=key,
                         value=body.value))
     db.commit()
+    if key == "vitrine2_prefs":
+        background.add_task(_sweep_criteria_async, c.tenant_id, c.id)
     return {"key": key, "ok": True}
 
 

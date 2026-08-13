@@ -145,6 +145,25 @@ deadline_warn_days = 3
 #      servers — off by default, your decision to make.
 matrix_pdf_link_fetch = false
 
+# --- Correspondance par critères / criteria matching --------------------------
+# FR · Les critères sauvegardés du client (« Mes alertes » de la Vitrine) sont
+#      lancés contre le flux disponible; les correspondances arrivent dans son
+#      portail. Complète l'ingestion des auto-courriels Matrix (recherche
+#      CURÉE du courtier sur l'inventaire Centris complet) — ne la remplace
+#      pas : le DDF® ne porte que les inscriptions syndiquées.
+#      true = générateur DÉMO (inscriptions fabriquées, nº 99xxxxxx, adresse
+#      marquée « (démo) ») pour essayer le parcours avant les identifiants
+#      licenciés. À laisser false en production.
+# EN · The client's saved criteria (the Vitrine's "Mes alertes") run against
+#      whichever feed is available and matches land in their portal. This
+#      COMPLEMENTS Matrix auto-email ingestion (the broker's CURATED search
+#      over full Centris inventory) — it does not replace it: DDF® only
+#      carries syndicated listings.
+#      true = DEMO generator (fabricated listings, 99xxxxxx numbers, address
+#      tagged "(démo)") to exercise the flow before licensed credentials.
+#      Leave false in production.
+criteria_demo_provider = false
+
 # --- Intelligence vendeur / Seller Intelligence (seller_intelligence) ----------
 # FR · Fournisseur stub (démo) · slot Registre foncier / JLR prêt. Canaux :
 #      lettre/script toujours permis; courriel/SMS avec base LCAP; voix

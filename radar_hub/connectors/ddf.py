@@ -156,58 +156,33 @@ def _criteria_filter(p: dict) -> str:
     return " and ".join(parts)
 
 
+def search_cards(prefs: dict, top: int = 20,
+                 client: DDFClient | None = None) -> list[dict]:
+    """Vitrine saved criteria → listing cards from the licensed pool."""
+    client = client or DDFClient()
+    found = client.search_properties(_criteria_filter(prefs), top=top)
+    return [{
+        "centris_no": str(p.get("ListingId", "")),
+        "address": (p.get("UnparsedAddress") or "")[:290],
+        "area": (p.get("City") or "")[:190],
+        "price": _num(p.get("ListPrice")) or 0,
+        "beds": _num(p.get("BedroomsTotal")) or 0,
+        "baths": _num(p.get("BathroomsTotalInteger")) or 0,
+        "prop_type": (p.get("PropertySubType") or "")[:120],
+        "url": (p.get("ListingURL") or "")[:500],
+    } for p in found if p.get("ListingId")]
+
+
 def match_criteria(db: Session, tenant_id: str,
                    client: DDFClient | None = None, top: int = 20) -> dict:
-    """The fully-licensed replacement for reading the Matrix portal page:
-    run each client's saved Vitrine criteria against the DDF® pool and file
-    the matches straight into their inventory (deduped, alert-mailer
-    mirrored, enriched — the normal listing pipeline)."""
-    import json as _json
-
-    from ..models import Contact, PortalKV
-    from .matrix_email import store_listings
-
-    client = client or DDFClient()
-    if not client.configured:
-        return {"clients": 0, "error": "DDF non configuré (DDF_CLIENT_ID/SECRET)"}
-    out: dict = {"clients": 0, "matched": 0, "new": 0, "details": []}
-    rows = (db.query(Contact)
-            .filter(Contact.tenant_id == tenant_id,
-                    Contact.lifecycle == "client",
-                    Contact.portal_token != "").all())
-    for c in rows:
-        kv = (db.query(PortalKV)
-              .filter_by(tenant_id=tenant_id, token=c.portal_token,
-                         key="vitrine2_prefs").first())
-        if not kv:
-            continue
-        try:
-            prefs = _json.loads(kv.value).get("p") or {}
-        except (ValueError, AttributeError):
-            continue
-        out["clients"] += 1
-        try:
-            found = client.search_properties(_criteria_filter(prefs), top=top)
-        except httpx.HTTPError as exc:
-            out["details"].append({"client": c.name, "error": str(exc)[:120]})
-            continue
-        cards = [{
-            "centris_no": str(p.get("ListingId", "")),
-            "address": (p.get("UnparsedAddress") or "")[:290],
-            "area": (p.get("City") or "")[:190],
-            "price": _num(p.get("ListPrice")) or 0,
-            "beds": _num(p.get("BedroomsTotal")) or 0,
-            "baths": _num(p.get("BathroomsTotalInteger")) or 0,
-            "prop_type": (p.get("PropertySubType") or "")[:120],
-            "url": (p.get("ListingURL") or "")[:500],
-        } for p in found if p.get("ListingId")]
-        r = store_listings(db, tenant_id, c, cards,
-                           raw_id=f"ddfmatch-{c.id}")
-        out["matched"] += len(cards)
-        out["new"] += r["listings_new"]
-        out["details"].append({"client": c.name, "matched": len(cards),
-                               "new": r["listings_new"]})
-    return out
+    """DDF®-specific entry point for the criteria sweep. The provider-neutral
+    orchestrator lives in connectors.criteria — this pins the provider to the
+    licensed CREA pool (used by POST /api/connectors/ddf/match)."""
+    from . import criteria
+    prov, err = criteria.ddf_provider(client)
+    if not prov:
+        return {"clients": 0, "matched": 0, "new": 0, "error": err}
+    return criteria.match_criteria(db, tenant_id, top=top, provider=prov)
 
 
 def sweep(db: Session, tenant_id: str,
