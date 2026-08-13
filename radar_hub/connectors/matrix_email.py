@@ -348,10 +348,17 @@ def _queue_portal_link(db: Session, tenant_id: str, contact: Contact,
     already pending for this client; a fresh email after completion
     re-queues, since the same URL carries the new listings."""
     from ..models import MatrixLinkTask
-    m = _RX_PORTAL_URL.search(raw)
-    if not m:
+    # The footer's unsubscribe link lives on the same host
+    # (…/UnsubscribeDirectEmail.aspx) and can appear FIRST in the raw source,
+    # so: drop unsubscribe URLs, then prefer the actual portal page
+    # (Portal.aspx — the « View All Listings » target) over anything else.
+    urls = [u.rstrip(".,)>").replace("&amp;", "&")
+            for u in _RX_PORTAL_URL.findall(raw)
+            if "unsubscribe" not in u.lower()]
+    preferred = [u for u in urls if "portal.aspx" in u.lower()]
+    if not (preferred or urls):
         return False
-    url = m.group(0).rstrip(".,)>")[:500]
+    url = (preferred or urls)[0][:500]
     if (db.query(MatrixLinkTask)
             .filter_by(tenant_id=tenant_id, contact_id=contact.id,
                        url=url, status="pending").first()):

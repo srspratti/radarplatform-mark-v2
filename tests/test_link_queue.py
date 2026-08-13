@@ -50,6 +50,34 @@ def test_link_only_email_queues_portal_url(client, db):
     assert db.query(MatrixLinkTask).filter_by(contact_id=c["id"]).count() == 2
 
 
+def test_unsubscribe_link_is_never_queued(client, db):
+    """Real board template (seen live): the CoreLogic footer's unsubscribe
+    link is on matrix.centris.ca too and appears FIRST in the raw source.
+    The queue must pick the Portal.aspx link — and queue nothing when only
+    the unsubscribe link exists."""
+    c, intake = _client_with_intake(client, db, name="Unsub Trap",
+                                    phone="514 555 0146")
+    unsub = ("https://matrix.centris.ca/Matrix/Public/"
+             "UnsubscribeDirectEmail.aspx?ID=14804704016-1&Eml=YWJj")
+    raw = (f"To: {intake}\nSubject: Your Portal has new listings\n\n"
+           f"Click this link if you wish to Unsubscribe. {unsub}\n"
+           "Click the following link to view the listings:\n"
+           f"View All Listings: {PORTAL_URL}\n")
+    out = process_raw_email(db, T, raw, raw_id="lq-unsub-1")
+    assert out["link_queued"] is True
+    row = (db.query(MatrixLinkTask)
+           .filter_by(tenant_id=T, contact_id=c["id"]).one())
+    assert row.url == PORTAL_URL
+    # an email carrying ONLY the unsubscribe link queues nothing at all
+    c2, intake2 = _client_with_intake(client, db, name="Unsub Only",
+                                      phone="514 555 0147")
+    out2 = process_raw_email(db, T, f"To: {intake2}\n\n{unsub}\n",
+                             raw_id="lq-unsub-2")
+    assert out2["link_queued"] is False
+    assert (db.query(MatrixLinkTask)
+            .filter_by(tenant_id=T, contact_id=c2["id"]).count()) == 0
+
+
 def test_email_without_portal_link_queues_nothing(client, db):
     c, intake = _client_with_intake(client, db, name="No Link",
                                     phone="514 555 0143")
