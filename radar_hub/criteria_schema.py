@@ -132,12 +132,13 @@ FIELDS: list[dict] = [
     # Status & dates
     {"key": "status", "kind": "multi", "group": "status",
      "label": ("Statut", "Status"), "reso": "StandardStatus",
-     "options": STATUS,
+     "options": STATUS, "client": False,
      "reso_map": {"active": "Active", "sold": "Closed", "expired": "Expired",
                   "cancelled": "Canceled", "off_market": "Withdrawn"}},
     {"key": "new_since_days", "kind": "int", "group": "status",
      "label": ("Nouvelles inscriptions (derniers N jours)",
-               "New listings (last N days)"), "reso": "OnMarketDate"},
+               "New listings (last N days)"), "reso": "OnMarketDate",
+     "client": False},
     # Price
     {"key": "price", "kind": "range", "group": "price",
      "label": ("Prix demandé ($)", "Asked price ($)"), "reso": "ListPrice"},
@@ -212,14 +213,16 @@ GROUPS = [("location", "Localisation", "Location"),
 BY_KEY = {f["key"]: f for f in FIELDS}
 
 
-def schema(lang: str = "fr") -> dict:
+def schema(lang: str = "fr", audience: str = "broker") -> dict:
     """Form definition for both UIs, plus an honest note on what actually
-    reaches the feed today versus what is only recorded."""
+    reaches the feed today versus what is only recorded. audience="client"
+    drops the fields that only make sense to a broker (listing status,
+    on-market windows) — the client's portal shows what they shop by."""
     i = 1 if lang == "fr" else 2
-    def lbl(t):  # noqa: E306
-        return t[i - 1] if isinstance(t, tuple) and len(t) == 2 else t[i]
     fields = []
     for f in FIELDS:
+        if audience == "client" and f.get("client") is False:
+            continue
         item = {"key": f["key"], "kind": f["kind"], "group": f["group"],
                 "label": f["label"][i - 1], "filterable": bool(f["reso"])}
         if f.get("options"):

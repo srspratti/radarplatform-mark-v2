@@ -2277,16 +2277,43 @@ function DesignSection({ lang, log, theme, setTheme, refEl }) {
 /* ---- Préférences de recherche (Alertes) ---- */
 const AREAS_ALL = ["Le Plateau-Mont-Royal", "Vieux-Longueuil", "Mont-Tremblant", "Sainte-Agathe-des-Monts", "Sainte-Adèle", "Sainte-Marguerite–Lac-Masson", "Saint-Sauveur", "Val-David"];
 const TYPES_ALL = [["detache", "Détaché", "Detached"], ["condo", "Condo", "Condo"], ["plex", "Plex", "Plex"], ["mobile", "Maison mobile", "Mobile home"]];
-const DEFAULT_PREFS = { pmin: 250000, pmax: 650000, beds: 2, baths: 1, lot: 0, types: ["detache", "condo"], must: { piscine: false, garage: false, foyer: false }, areas: ["Le Plateau-Mont-Royal", "Vieux-Longueuil"] };
+// Canonical criteria shape — the same vocabulary the broker's curated search
+// and the licensed-feed filter builder use (radar_hub/criteria_schema.py).
+const DEFAULT_PREFS = { price: { min: 250000, max: 650000 }, beds: 2, baths: 1, lot: { min: 0, max: 0 }, year: { min: 0, max: 0 }, living: { min: 0, max: 0 }, property_types: [], areas: ["Le Plateau-Mont-Royal", "Vieux-Longueuil"], pool: [], water: [], view: [], basement: [], amenities: [], fireplace: [] };
+// Portals saved before the richer form keep their choices: flat prefs are
+// lifted into the canonical shape, must-haves onto the real vocabularies.
+const migratePrefs = (s) => {
+  if (!s || (s.price && !("pmin" in s))) return { ...DEFAULT_PREFS, ...(s || {}) };
+  const out = { ...DEFAULT_PREFS };
+  if ("pmin" in s || "pmax" in s) out.price = { min: +s.pmin || 0, max: +s.pmax || 0 };
+  if (s.beds) out.beds = +s.beds;
+  if (s.baths) out.baths = +s.baths;
+  if (s.lot) out.lot = { min: +s.lot || 0, max: 0 };
+  if (Array.isArray(s.areas)) out.areas = s.areas;
+  const must = s.must || {};
+  if (must.piscine) out.pool = ["above_ground", "heated", "indoor", "inground"];
+  if (must.foyer) out.fireplace = ["gas_fireplace", "wood_fireplace", "wood_stove", "pellet_fireplace"];
+  if (must.garage) out.amenities = ["garage_opener"];
+  return out;
+};
 function PrefsView({ lang, log }) {
   const t = (fr, en) => (lang === "fr" ? fr : en);
   const [p, setP] = useState(DEFAULT_PREFS);
   const [status, setStatus] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { const saved = await store.get(K.prefs, null); if (saved && saved.p) { setP({ ...DEFAULT_PREFS, ...saved.p }); setStatus(saved.status || null); } setLoaded(true); })(); }, []);
+  const [schema, setSchema] = useState(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => { (async () => { const saved = await store.get(K.prefs, null); if (saved && saved.p) { setP(migratePrefs(saved.p)); setStatus(saved.status || null); } setLoaded(true); })(); }, []);
+  useEffect(() => { (async () => {
+    try { const tok = (window.__VITRINE_TOKEN__ || ""); if (!tok) return;
+      const r = await fetch(`/api/vitrine/criteria-schema/${tok}?lang=${lang}`);
+      if (r.ok) setSchema(await r.json()); } catch {} })(); }, [lang]);
   const up = (patch) => setP((c) => ({ ...c, ...patch }));
-  const toggleArr = (key, v) => up({ [key]: p[key].includes(v) ? p[key].filter((x) => x !== v) : [...p[key], v] });
+  const upRange = (key, part, v) => up({ [key]: { ...(p[key] || {}), [part]: v } });
+  const toggleArr = (key, v) => up({ [key]: (p[key] || []).includes(v) ? p[key].filter((x) => x !== v) : [...(p[key] || []), v] });
   const setAll = (key, values) => up({ [key]: values });
+  const optionsFor = (key) => ((schema && schema.fields.find((f) => f.key === key)) || {}).options || [];
+  const labelFor = (key) => ((schema && schema.fields.find((f) => f.key === key)) || {}).label || key;
   const AllNone = ({ k, all }) => (
     <span className="inline-flex gap-1" style={{ marginLeft: "auto" }}>
       <button onClick={() => setAll(k, [...all])} disabled={p[k].length === all.length}
@@ -2300,18 +2327,17 @@ function PrefsView({ lang, log }) {
     </span>
   );
   const matches = LISTINGS.filter((l) => {
-    const typeOk = p.types.includes(l.condoFees > 0 ? "condo" : "detache");
-    const priceOk = l.price >= p.pmin && l.price <= p.pmax;
+    const priceOk = (!p.price.min || l.price >= p.price.min) && (!p.price.max || l.price <= p.price.max);
     const bedsOk = l.beds >= p.beds, bathsOk = l.baths >= p.baths;
-    const poolOk = !p.must.piscine || /piscine/i.test(l.inclFr);
-    const garOk = !p.must.garage || /garage/i.test(l.parkFr);
+    const poolOk = !p.pool.length || /piscine/i.test(l.inclFr);
+    const foyerOk = !p.fireplace.length || /foyer|poêle/i.test(l.inclFr);
     const areaOk = p.areas.length === 0 || p.areas.some((a) => l.area.includes(a));
-    return typeOk && priceOk && bedsOk && bathsOk && poolOk && garOk && areaOk;
+    return priceOk && bedsOk && bathsOk && poolOk && foyerOk && areaOk;
   }).length;
   async function save() {
     setStatus("vitrine");
     await store.set(K.prefs, { p, status: "vitrine" });
-    log("criteria_update", { summary: `${fmtK(p.pmin, lang)}–${fmtK(p.pmax, lang)} · ${p.beds}+ ch · ${p.areas.length} secteurs` });
+    log("criteria_update", { summary: `${fmtK(p.price.min, lang)}–${fmtK(p.price.max, lang)} · ${p.beds}+ ch · ${p.areas.length} secteurs` });
     setTimeout(async () => { setStatus("sent"); await store.set(K.prefs, { p, status: "sent" }); }, 600);
     setTimeout(async () => { setStatus("synced"); await store.set(K.prefs, { p, status: "synced" }); }, 3200);
   }
@@ -2333,9 +2359,9 @@ function PrefsView({ lang, log }) {
 
       <div className="space-y-3">
         <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
-          <SectionHead icon={DollarSign} title={t("Prix", "Price")} note={`${fmt$(p.pmin, lang)} – ${fmt$(p.pmax, lang)}`} />
-          <SliderRow label={t("Minimum", "Minimum")} val={p.pmin} set={(v) => up({ pmin: Math.min(v, p.pmax - 25000) })} min={100000} max={875000} step={25000} suffix=" $" field="pmin" />
-          <div className="mt-2"><SliderRow label={t("Maximum", "Maximum")} val={p.pmax} set={(v) => up({ pmax: Math.max(v, p.pmin + 25000) })} min={125000} max={900000} step={25000} suffix=" $" field="pmax" /></div>
+          <SectionHead icon={DollarSign} title={t("Prix", "Price")} note={`${fmt$(p.price.min, lang)} – ${fmt$(p.price.max, lang)}`} />
+          <SliderRow label={t("Minimum", "Minimum")} val={p.price.min} set={(v) => upRange("price", "min", Math.min(v, p.price.max - 25000))} min={100000} max={875000} step={25000} suffix=" $" field="pmin" />
+          <div className="mt-2"><SliderRow label={t("Maximum", "Maximum")} val={p.price.max} set={(v) => upRange("price", "max", Math.max(v, p.price.min + 25000))} min={125000} max={900000} step={25000} suffix=" $" field="pmax" /></div>
         </section>
 
         <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
@@ -2344,16 +2370,40 @@ function PrefsView({ lang, log }) {
           <div className="flex gap-1.5 mb-3">{[1, 2, 3, 4].map((n) => <Chip key={n} on={p.beds === n} onClick={() => up({ beds: n })}>{n}+</Chip>)}</div>
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Salles de bain (min)", "Bathrooms (min)")}</div>
           <div className="flex gap-1.5 mb-3">{[1, 1.5, 2].map((n) => <Chip key={n} on={p.baths === n} onClick={() => up({ baths: n })}>{n}+</Chip>)}</div>
-          <div className="mb-3"><SliderRow label={t("Terrain (min, pi²)", "Lot area (min, sq ft)")} val={p.lot} set={(v) => up({ lot: v })} min={0} max={30000} step={2500} suffix=" pi²" field="lot" /></div>
-          <div className="flex items-center" style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Types de bâtiment", "Building types")}<AllNone k="types" all={TYPES_ALL.map(([k]) => k)} /></div>
-          <div className="flex flex-wrap gap-1.5 mb-3">{TYPES_ALL.map(([k, fr, en]) => <Chip key={k} on={p.types.includes(k)} onClick={() => toggleArr("types", k)}>{lang === "fr" ? fr : en}</Chip>)}</div>
-          <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Indispensables", "Must-haves")}</div>
-          <div className="flex flex-wrap gap-1.5">
-            {[["piscine", t("Piscine", "Pool")], ["garage", "Garage"], ["foyer", t("Foyer-poêle", "Fireplace-stove")]].map(([k, label]) => (
-              <Chip key={k} on={p.must[k]} onClick={() => up({ must: { ...p.must, [k]: !p.must[k] } })}>{label}</Chip>
-            ))}
+          <div className="mb-3"><SliderRow label={t("Terrain (min, pi²)", "Lot area (min, sq ft)")} val={p.lot.min} set={(v) => upRange("lot", "min", v)} min={0} max={30000} step={2500} suffix=" pi²" field="lot" /></div>
+          <div className="mb-3"><SliderRow label={t("Superficie habitable (min, pi²)", "Living area (min, sq ft)")} val={p.living.min} set={(v) => upRange("living", "min", v)} min={0} max={4000} step={250} suffix=" pi²" field="living" /></div>
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Année de construction (à partir de)", "Year built (from)")}</div>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {[0, 1960, 1980, 2000, 2015].map((y) => <Chip key={y} on={(p.year.min || 0) === y} onClick={() => upRange("year", "min", y)}>{y === 0 ? t("Toutes", "Any") : `${y}+`}</Chip>)}
           </div>
+          {optionsFor("property_types").length > 0 && <>
+            <div className="flex items-center" style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{labelFor("property_types")}<AllNone k="property_types" all={optionsFor("property_types").map((o) => o.value)} /></div>
+            <div className="flex flex-wrap gap-1.5">{optionsFor("property_types").map((o) => <Chip key={o.value} on={p.property_types.includes(o.value)} onClick={() => toggleArr("property_types", o.value)}>{o.label}</Chip>)}</div>
+          </>}
         </section>
+
+        {schema && (
+          <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+            <button onClick={() => setMore((v) => !v)} className="w-full text-left">
+              <SectionHead icon={Sparkles} title={t("Plus de critères", "More criteria")}
+                note={more ? t("masquer", "hide") : t("piscine, vue, sous-sol, commodités…", "pool, view, basement, amenities…")} />
+            </button>
+            {more && ["pool", "water", "view", "basement", "fireplace", "amenities"].map((key) => {
+              const opts = optionsFor(key);
+              if (!opts.length) return null;
+              return (
+                <div key={key} className="mt-3">
+                  <div className="flex items-center" style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>
+                    {labelFor(key)}<AllNone k={key} all={opts.map((o) => o.value)} />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {opts.map((o) => <Chip key={o.value} on={(p[key] || []).includes(o.value)} onClick={() => toggleArr(key, o.value)}>{o.label}</Chip>)}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
 
         <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
           <div className="flex items-center"><SectionHead icon={MapPin} title={t("Secteurs", "Areas")} note={`${p.areas.length} ${t("choisis", "selected")}`} /><AllNone k="areas" all={AREAS_ALL} /></div>
@@ -2391,8 +2441,8 @@ function PrefsView({ lang, log }) {
         )}
 
         <div className="rounded-xl p-3" style={{ background: C.metroSoft, border: "1px solid #C9D9F2", fontSize: 11.5, color: C.ink, lineHeight: 1.55 }}>
-          {t("Pourquoi deux étapes ? Centris/Matrix n’offre pas d’API publique d’écriture des recherches sauvegardées — seul le compte Matrix de la courtière peut modifier la recherche automatique. Vitrine applique donc vos critères immédiatement à ses propres alertes et crée une tâche « 1 clic » pour Julie. Chaque changement de critères est aussi un signal d’intention visible à son tableau de bord.",
-             "Why two steps? Centris/Matrix has no public write API for saved searches — only the broker’s Matrix account can edit the auto-search. So Vitrine applies your criteria to its own alerts instantly and creates a one-click task for Julie. Each criteria change is also an intent signal on her dashboard.")}
+          {t("Pourquoi deux étapes ? Dès l’enregistrement, vos critères sont appliqués à votre Vitrine : les inscriptions correspondantes du flux licencié s’ajoutent tout de suite, sans attendre. En parallèle, Centris/Matrix n’offre pas d’API publique d’écriture des recherches sauvegardées — seul le compte Matrix de la courtière peut modifier la recherche automatique, d’où la tâche « 1 clic » créée pour Julie. Chaque changement de critères est aussi un signal d’intention visible à son tableau de bord.",
+             "Why two steps? The moment you save, your criteria are applied to your Vitrine: matching listings from the licensed feed are added right away, no waiting. Separately, Centris/Matrix has no public write API for saved searches — only the broker’s Matrix account can edit the auto-search, hence the one-click task created for Julie. Each criteria change is also an intent signal on her dashboard.")}
         </div>
       </div>
     </div>

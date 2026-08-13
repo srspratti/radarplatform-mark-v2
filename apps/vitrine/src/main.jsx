@@ -29,6 +29,9 @@ const TOKEN = (() => {
   return t === "demo" ? "" : t;
 })();
 
+// « Mes alertes » reads the shared criteria vocabulary from the hub with it.
+window.__VITRINE_TOKEN__ = TOKEN;
+
 const LOADED_AT = Date.now();
 const EVENTS_KEY = "vitrine2_events";
 const sent = new Set();

@@ -255,3 +255,38 @@ def test_legacy_vitrine_prefs_still_match(client, db, demo_on):
     assert "fireplace" not in crit
     f = odata_filter(crit)
     assert "ListPrice ge 300000" in f and "contains(City,'Longueuil')" in f
+
+
+def test_portal_gets_the_client_audience_schema(client, db):
+    """The Vitrine renders « Mes alertes » from the same vocabulary, minus
+    the broker-only fields, and only with a valid portal token."""
+    c = _client_with_prefs(client, db, name="Portail", phone="514 555 0341")
+    s = client.get(f"/api/vitrine/criteria-schema/{c['portal_token']}").json()
+    keys = {f["key"] for f in s["fields"]}
+    assert {"price", "beds", "areas", "pool", "amenities", "view"} <= keys
+    assert "status" not in keys and "new_since_days" not in keys
+    # the broker audience still sees them
+    b = {f["key"] for f in client.get("/api/criteria/schema").json()["fields"]}
+    assert {"status", "new_since_days"} <= b
+    # same rejection as every other portal endpoint (401, and it does not
+    # confirm whether the token exists)
+    assert client.get("/api/vitrine/criteria-schema/pas-un-jeton"
+                      ).status_code == 401
+
+
+def test_portal_saves_canonical_criteria_and_sweeps(client, db, demo_on):
+    """The richer form posts canonical criteria straight through the portal
+    KV surface, and the immediate sweep honours them."""
+    lead = client.post("/api/leads", json={
+        "name": "Canonique", "phone": "514 555 0342",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    prefs = {"p": {"price": {"min": 600000, "max": 750000}, "beds": 3,
+                   "areas": ["Outremont"], "pool": ["inground"],
+                   "amenities": ["central_ac"]}, "status": "vitrine"}
+    r = client.put(f"/api/vitrine/storage/{c['portal_token']}/vitrine2_prefs",
+                   json={"value": json.dumps(prefs)})
+    assert r.status_code == 200
+    rows = db.query(Listing).filter_by(contact_id=c["id"]).all()
+    assert rows and all(600000 <= x.price <= 750000 for x in rows)
+    assert all(x.area == "Outremont" for x in rows)

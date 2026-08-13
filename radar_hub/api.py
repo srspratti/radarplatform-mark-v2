@@ -233,12 +233,12 @@ def client_detail(contact_id: int, db: Session = Depends(get_db),
 
 
 @router.get("/criteria/schema", dependencies=[Depends(auth)])
-def criteria_schema_get(lang: str = "fr"):
+def criteria_schema_get(lang: str = "fr", audience: str = "broker"):
     """The Centris-shaped search vocabulary both forms render from: field
     groups, enumerated options, bilingual labels, and — honestly — which
     fields actually reach the licensed feed today."""
     from . import criteria_schema
-    return criteria_schema.schema(lang)
+    return criteria_schema.schema(lang, audience)
 
 
 class BrokerCriteriaIn(BaseModel):
@@ -1420,6 +1420,17 @@ def vitrine_ai(body: VitrineAIIn, db: Session = Depends(get_db)):
 
 class KVIn(BaseModel):
     value: str
+
+
+@router.get("/vitrine/criteria-schema/{token}")
+def kv_criteria_schema(token: str, lang: str = "fr",
+                       db: Session = Depends(get_db)):
+    """Portal-side copy of the search vocabulary (client audience), so the
+    Vitrine's « Mes alertes » form and the broker's curated search offer the
+    same choices instead of drifting apart."""
+    from . import criteria_schema
+    _contact_by_token(db, token)
+    return criteria_schema.schema(lang, audience="client")
 
 
 @router.get("/vitrine/storage/{token}/{key}")
