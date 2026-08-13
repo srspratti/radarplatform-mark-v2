@@ -10,10 +10,22 @@ compte du courtier, PUIS pousse le PDF vers le hub (ingest-pdf). Garde-fous :
   • sélecteurs PLACEHOLDER_… à remplir contre le DOM réel de votre tableau
 
 Usage:
+  # grille → crée les inscriptions du client
   python matrix_results_harvester.py --hub http://localhost:8000 \
-      --key $RADAR_API_KEY --contact-id 3 \
+      --key $RADAR_API_KEY --contact-id 3 --format grid \
       --results-url "https://matrix.centris.ca/Matrix/…"          # dry-run
+  # détaillé → ENRICHIT (année, taxes, pièces, remarques, photos); se route
+  # seul par nº Centris, donc --contact-id facultatif
+  python matrix_results_harvester.py --hub http://localhost:8000 \
+      --key $RADAR_API_KEY --format detailed \
+      --results-url "https://matrix.centris.ca/Matrix/…"
   … puis relancer avec --apply une fois la sortie vérifiée.
+
+L'export détaillé est le chemin d'enrichissement en attendant le DDF®/
+Source.immo : mêmes données que la fiche que vous imprimez à la main, depuis
+VOTRE session, sans tiers. / The detailed export is the enrichment path while
+waiting for DDF®/Source.immo: the same sheet you print by hand, from YOUR
+session, no third party involved.
 """
 from __future__ import annotations
 
@@ -32,14 +44,24 @@ SEL_SELECT_ALL = "PLACEHOLDER_checkbox_select_all"        # grid header checkbox
 SEL_PRINT_TAB = "PLACEHOLDER_actions_print_button"        # Actions → Print
 SEL_FORMAT_LIST = "PLACEHOLDER_print_format_listbox"      # e.g. my:Partial
 SEL_PRINT_TO_PDF = "PLACEHOLDER_print_to_pdf_button"      # « Print to PDF »
-PRINT_FORMAT_LABEL = "my:Partial"                         # detailed grid format
+
+# Deux formats d'export, deux usages / two export formats, two jobs:
+#   grid     → crée les inscriptions (nº, adresse, prix) — la grille de résultats
+#   detailed → ENRICHIT (année, taxes, pièces, remarques, photos) et se route
+#              elle-même par nº Centris côté hub (contact_id facultatif)
+# Les libellés doivent correspondre EXACTEMENT à ceux du menu d'impression de
+# votre chambre / labels must match your board's print menu exactly.
+FORMAT_LABELS = {
+    "grid": "my:Partial",
+    "detailed": "Client Detailed with Photo Album",
+}
 
 
 def human_pause(lo: float = 1.2, hi: float = 3.5) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
-def harvest(results_url: str) -> Path:
+def harvest(results_url: str, format_label: str) -> Path:
     from playwright.sync_api import sync_playwright
     DOWNLOADS.mkdir(exist_ok=True)
     with sync_playwright() as p:
@@ -57,7 +79,7 @@ def harvest(results_url: str) -> Path:
         human_pause()
         page.click(SEL_PRINT_TAB)
         human_pause()
-        page.select_option(SEL_FORMAT_LIST, label=PRINT_FORMAT_LABEL)
+        page.select_option(SEL_FORMAT_LIST, label=format_label)
         human_pause()
         with page.expect_download() as dl:
             page.click(SEL_PRINT_TO_PDF)
@@ -72,9 +94,11 @@ def push(hub: str, key: str, contact_id: int, pdf: Path, apply: bool) -> None:
                "content_b64": base64.b64encode(pdf.read_bytes()).decode(),
                "filename": pdf.name}
     if not apply:
+        who = (f"contact_id={contact_id}" if contact_id
+               else "routage par nº Centris (tous les clients concernés)")
         print(f"[dry-run] {pdf} ({pdf.stat().st_size} o) → "
               f"POST {hub}/api/connectors/matrix/ingest-pdf "
-              f"(contact_id={contact_id}). Relancer avec --apply pour envoyer.")
+              f"({who}). Relancer avec --apply pour envoyer.")
         return
     import httpx
     r = httpx.post(f"{hub}/api/connectors/matrix/ingest-pdf", json=payload,
@@ -86,17 +110,27 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--hub", required=True)
     ap.add_argument("--key", default="")
-    ap.add_argument("--contact-id", type=int, required=True)
+    ap.add_argument("--contact-id", type=int, default=0,
+                    help="client visé; requis en --format grid, facultatif en "
+                         "--format detailed (le hub route par nº Centris)")
+    ap.add_argument("--format", choices=sorted(FORMAT_LABELS), default="grid",
+                    help="grid = crée les inscriptions · detailed = enrichit "
+                         "(année, taxes, pièces, remarques, photos)")
     ap.add_argument("--results-url", required=True,
                     help="URL des résultats de l'auto-courriel (votre session)")
     ap.add_argument("--pdf", help="sauter le navigateur: pousser ce PDF-ci")
     ap.add_argument("--apply", action="store_true",
                     help="envoyer réellement (défaut: dry-run)")
     args = ap.parse_args()
+    if args.format == "grid" and not args.contact_id:
+        sys.exit("--contact-id requis avec --format grid : une grille de "
+                 "résultats ne dit pas à quel client elle appartient. "
+                 "(--format detailed se route seul par nº Centris.)")
     if "PLACEHOLDER" in SEL_SELECT_ALL and not args.pdf:
         sys.exit("Sélecteurs PLACEHOLDER_… non remplis — voir README. "
                  "(Ou fournir --pdf pour pousser un PDF déjà exporté.)")
-    pdf = Path(args.pdf) if args.pdf else harvest(args.results_url)
+    pdf = (Path(args.pdf) if args.pdf
+           else harvest(args.results_url, FORMAT_LABELS[args.format]))
     push(args.hub, args.key, args.contact_id, pdf, args.apply)
 
 

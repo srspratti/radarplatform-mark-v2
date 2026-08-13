@@ -42,6 +42,35 @@ python matrix_results_harvester.py \
 # … vérifier la sortie, puis ajouter --apply
 ```
 
+### Deux formats — et pourquoi le détaillé remplace un « API de détails »
+
+🇫🇷 `--format grid` (défaut, `my:Partial`) crée les inscriptions du client.
+`--format detailed` (« Client Detailed with Photo Album ») **enrichit** :
+année de construction, taxes, dimensions des pièces (→ plan 3D de la
+Vitrine), remarques et photos. Le hub route l'export détaillé tout seul par
+nº Centris, donc `--contact-id` devient facultatif — un seul export enrichit
+tous les clients qui suivent ces inscriptions.
+
+C'est le chemin d'enrichissement **en attendant le DDF®/Source.immo** : mêmes
+données que la fiche que vous imprimez déjà à la main, depuis VOTRE session
+authentifiée, sans tiers, sans revendeur. Aucun besoin d'une API de
+« détails par nº » non officielle.
+
+🇬🇧 `--format grid` (default) creates the client's listings; `--format
+detailed` **enriches** them (year built, taxes, room dimensions → the
+Vitrine's 3D plan, remarks, photos) and routes itself by Centris number, so
+`--contact-id` is optional — one export enriches every client tracking those
+listings. This is the enrichment path **while waiting for DDF®/Source.immo**:
+the same sheet you already print by hand, from YOUR authenticated session,
+no third party, no reseller. No unofficial "details by id" API needed.
+
+```bash
+python matrix_results_harvester.py --hub http://localhost:8000 \
+  --key $RADAR_API_KEY --format detailed \
+  --results-url "https://matrix.centris.ca/…"          # dry-run
+# … vérifier, puis --apply
+```
+
 Les sélecteurs `PLACEHOLDER_…` doivent être remplis contre le DOM réel
 (DevTools → clic droit sur l'élément → Copy selector) — ils varient selon la
 configuration du tableau. Cadence humaine intégrée (pauses aléatoires);
