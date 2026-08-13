@@ -392,42 +392,66 @@ function ConsentPanel({cid, toast}) {
   </div>;
 }
 
+function CriteriaField({f, val, set}) {
+  const cls="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] w-full";
+  if (f.kind==="range") { const v=val||{};
+    return <div className="flex gap-1">
+      <input type="number" className={cls} placeholder="min" value={v.min||""}
+        onChange={e=>set({...v, min:+e.target.value||0})}/>
+      <input type="number" className={cls} placeholder="max" value={v.max||""}
+        onChange={e=>set({...v, max:+e.target.value||0})}/>
+    </div>; }
+  if (f.kind==="int") return <input type="number" className={cls} value={val||""}
+      onChange={e=>set(+e.target.value||0)}/>;
+  if (f.kind==="bool") return <input type="checkbox" checked={!!val}
+      onChange={e=>set(e.target.checked)}/>;
+  if (f.kind==="text") return <input className={cls} value={val||""}
+      onChange={e=>set(e.target.value)}/>;
+  if (f.kind==="multi_text") return <input className={cls} placeholder="Rosemont, Villeray…"
+      value={(val||[]).join(", ")}
+      onChange={e=>set(e.target.value.split(",").map(s=>s.trim()).filter(Boolean))}/>;
+  return <select multiple className={cls+" h-16"} value={val||[]}
+    onChange={e=>set([...e.target.selectedOptions].map(o=>o.value))}>
+    {(f.options||[]).map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+  </select>;
+}
+
 function CriteriaPanel({cid, toast}) {
-  const [d,setD]=useState(null); const [busy,setBusy]=useState(false);
+  const [d,setD]=useState(null); const [schema,setSchema]=useState(null);
+  const [form,setForm]=useState(null); const [busy,setBusy]=useState(false);
   const load=useCallback(async()=>{ try{ setD(await api(`/clients/${cid}/criteria`)); }catch(e){} },[cid]);
   useEffect(()=>{ load(); },[load]);
-  const fmt=(c)=> !c ? T("—","—")
-    : [c.pmin||c.pmax ? `${(c.pmin||0).toLocaleString()}–${(c.pmax||0).toLocaleString()} $` : null,
-       c.beds ? `${c.beds}+ cc` : null, c.baths ? `${c.baths}+ sdb` : null,
-       (c.areas||[]).join(", ")||null].filter(Boolean).join(" · ");
-  const edit=async()=>{
-    const b=(d&&d.broker)||{};
-    const ask=(q,v)=>window.prompt(q, v==null?"":String(v));
-    const pmin=ask(T("Prix minimum ($) :","Minimum price ($):"), b.pmin||0); if (pmin===null) return;
-    const pmax=ask(T("Prix maximum ($) :","Maximum price ($):"), b.pmax||0); if (pmax===null) return;
-    const beds=ask(T("Chambres (minimum) :","Bedrooms (minimum):"), b.beds||0); if (beds===null) return;
-    const areas=ask(T("Secteurs, séparés par des virgules :","Sectors, comma-separated:"), (b.areas||[]).join(", ")); if (areas===null) return;
-    const note=ask(T("Note (pourquoi ces critères) :","Note (why these criteria):"), b.note||"")||"";
+  useEffect(()=>{ (async()=>{ try{ setSchema(await api(`/criteria/schema?lang=${LANG}`)); }catch(e){} })(); },[]);
+  const fmt=(c)=>{ if(!c) return "—";
+    const p=c.price||{}; const bits=[];
+    if (p.min||p.max) bits.push(`${(p.min||0).toLocaleString()}–${(p.max||0).toLocaleString()} $`);
+    if (c.beds) bits.push(`${c.beds}+ ${T("cc","bd")}`);
+    if (c.baths) bits.push(`${c.baths}+ ${T("sdb","ba")}`);
+    if ((c.areas||[]).length) bits.push(c.areas.slice(0,3).join(", "));
+    const extra=["pool","amenities","view","water","basement","property_types"]
+      .reduce((n,k)=>n+((c[k]||[]).length?1:0),0);
+    if (extra) bits.push(T(`+${extra} filtre(s)`,`+${extra} filter(s)`));
+    return bits.join(" · ")||T("aucun critère","no criteria"); };
+  const save=async()=>{
     setBusy(true);
-    try{ const r=await api(`/clients/${cid}/criteria`,{method:"PUT",
-      body:JSON.stringify({pmin:+pmin||0, pmax:+pmax||0, beds:+beds||0,
-        areas:areas.split(",").map(s=>s.trim()).filter(Boolean), note})});
+    try{ const r=await api(`/clients/${cid}/criteria`,{method:"PUT", body:JSON.stringify(form)});
       toast(T("Recherche curée enregistrée — balayage lancé","Curated search saved — sweep running"));
-      setD(x=>({...(x||{}), broker:r.broker})); }
+      setD(x=>({...(x||{}), broker:r.broker})); setForm(null); }
     catch(e){ toast(e.message,true); } finally{ setBusy(false); } };
   const clear=async()=>{
     if (!window.confirm(T("Retirer la recherche curée ? Les critères du client continuent de tourner.",
                           "Remove the curated search? The client's own criteria keep running."))) return;
     try{ await api(`/clients/${cid}/criteria`,{method:"DELETE"});
-      toast(T("Recherche curée retirée","Curated search removed")); load(); }
+      toast(T("Recherche curée retirée","Curated search removed")); setForm(null); load(); }
     catch(e){ toast(e.message,true);} };
   if (!d) return null;
   return <div className="panel p-3 mt-3">
     <div className="flex items-center justify-between mb-2">
       <div className="mono text-[10px] amber">{T("▮ CRITÈRES DE RECHERCHE — curés + client","▮ SEARCH CRITERIA — curated + client")}</div>
       <div className="flex gap-2">
-        <button disabled={busy} onClick={edit} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)] disabled:opacity-40">
-          {d.broker?T("✎ Modifier","✎ Edit"):T("➕ Définir","➕ Set")}</button>
+        <button disabled={busy||!schema} onClick={()=>setForm(form?null:{...(d.broker||{})})}
+          className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)] disabled:opacity-40">
+          {form?T("✕ Fermer","✕ Close"):d.broker?T("✎ Modifier","✎ Edit"):T("➕ Définir","➕ Set")}</button>
         {d.broker && <button onClick={clear} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-red-400">✖</button>}
       </div>
     </div>
@@ -440,6 +464,34 @@ function CriteriaPanel({cid, toast}) {
       <span className="text-sky-300 shrink-0">{T("Client","Client")}</span>
       <span className="flex-1 truncate">{d.client?fmt(d.client):T("aucun critère enregistré au portail","no criteria saved in the portal")}</span>
     </div>
+    {form && schema && <div className="mt-3 border-t border-[var(--line)]/40 pt-3">
+      {schema.groups.map(g=>{
+        const fs=schema.fields.filter(f=>f.group===g.value);
+        if (!fs.length) return null;
+        return <div key={g.value} className="mb-3">
+          <div className="mono text-[10px] text-[var(--mute)] mb-1">{g.label}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {fs.map(f=><label key={f.key} className="block">
+              <div className="mono text-[10px] mb-0.5 flex gap-1">
+                <span>{f.label}</span>
+                {!f.filterable && <span className="text-[var(--mute)]" title={schema.note}>◦</span>}
+              </div>
+              <CriteriaField f={f} val={form[f.key]}
+                set={v=>setForm(x=>({...x, [f.key]:v}))}/>
+            </label>)}
+          </div>
+        </div>;})}
+      <label className="block mb-2">
+        <div className="mono text-[10px] mb-0.5">{T("Note — pourquoi ces critères","Note — why these criteria")}</div>
+        <input className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] w-full"
+          value={form.note||""} onChange={e=>setForm(x=>({...x, note:e.target.value}))}/>
+      </label>
+      <div className="flex gap-2 items-center">
+        <button disabled={busy} onClick={save} className="mono text-[10px] px-3 py-1 rounded border border-[var(--amber)] text-[var(--amber)] disabled:opacity-40">
+          {T("Enregistrer et balayer","Save and sweep")}</button>
+        <span className="mono text-[10px] text-[var(--mute)]">{T("◦ = conservé mais pas encore filtré par le flux","◦ = kept but not yet filtered by the feed")}</span>
+      </div>
+    </div>}
     <div className="mono text-[10px] text-[var(--mute)] mt-2">
       {d.provider==="aucun"
         ? T(`Aucun flux branché (${d.error||""}) — les critères sont conservés et s'activeront dès le DDF®/Source.immo.`,

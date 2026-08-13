@@ -48,12 +48,15 @@ def demo_cards(prefs: dict, top: int = 20) -> list[dict]:
     """Plausible-but-fake listings inside the client's criteria. Deterministic
     on the criteria themselves, so re-running the sweep is idempotent instead
     of filling the portal with fresh junk on every pass."""
-    pmin = int(prefs.get("pmin") or 200_000)
-    pmax = int(prefs.get("pmax") or 700_000)
+    from ..criteria_schema import from_legacy
+    crit = from_legacy(prefs or {})
+    price = crit.get("price") or {}
+    pmin = int(price.get("min") or 200_000)
+    pmax = int(price.get("max") or 700_000)
     if pmax < pmin:
         pmin, pmax = pmax, pmin
-    beds = int(prefs.get("beds") or 2)
-    areas = [a for a in (prefs.get("areas") or []) if a] or ["Montréal"]
+    beds = int(crit.get("beds") or 2)
+    areas = [a for a in (crit.get("areas") or []) if a] or ["Montréal"]
     n = max(1, min(int(top or 6), 6))
     cards = []
     for i in range(n):

@@ -142,18 +142,12 @@ def enrich_listing(db: Session, tenant_id: str, row: Listing,
 
 
 def _criteria_filter(p: dict) -> str:
-    """Vitrine saved criteria ("Mes alertes") → OData filter. Conservative:
-    price + bedrooms always; areas as City contains-any when present.
-    Tune the field names here if CREA's payload uses different casing."""
-    parts = [f"ListPrice ge {int(p.get('pmin', 0))}",
-             f"ListPrice le {int(p.get('pmax', 10_000_000))}"]
-    if beds := int(p.get("beds", 0) or 0):
-        parts.append(f"BedroomsTotal ge {beds}")
-    areas = [a.replace("'", "''") for a in (p.get("areas") or [])][:6]
-    if areas:
-        parts.append("(" + " or ".join(
-            f"contains(City,'{a}')" for a in areas) + ")")
-    return " and ".join(parts)
+    """Saved criteria → OData filter. Accepts both the Vitrine's original
+    flat prefs and the richer Centris-shaped set; the field vocabulary and
+    the RESO mapping live in radar_hub.criteria_schema."""
+    from ..criteria_schema import from_legacy, odata_filter
+    crit = from_legacy(p or {})
+    return odata_filter(crit) or "ListPrice ge 0"
 
 
 def search_cards(prefs: dict, top: int = 20,

@@ -232,15 +232,20 @@ def client_detail(contact_id: int, db: Session = Depends(get_db),
     return _client_rich(db, t, c)
 
 
+@router.get("/criteria/schema", dependencies=[Depends(auth)])
+def criteria_schema_get(lang: str = "fr"):
+    """The Centris-shaped search vocabulary both forms render from: field
+    groups, enumerated options, bilingual labels, and — honestly — which
+    fields actually reach the licensed feed today."""
+    from . import criteria_schema
+    return criteria_schema.schema(lang)
+
+
 class BrokerCriteriaIn(BaseModel):
     """The broker's curated search for one client — the hub-side equivalent
-    of a Matrix saved search."""
-    pmin: int = 0
-    pmax: int = 0
-    beds: int = 0
-    baths: int = 0
-    areas: list[str] = []
-    types: list[str] = []
+    of a Matrix saved search. Accepts the full Centris-shaped vocabulary
+    (see /api/criteria/schema); unknown keys are dropped by normalize()."""
+    model_config = {"extra": "allow"}
     note: str = ""      # why the broker set it this way
 
 
@@ -268,9 +273,14 @@ def criteria_put(contact_id: int, body: BrokerCriteriaIn,
     c = db.get(Contact, contact_id)
     if not c or c.tenant_id != t:
         raise HTTPException(404, "contact introuvable")
-    crit = body.model_dump()
-    if crit["pmax"] and crit["pmin"] > crit["pmax"]:
-        crit["pmin"], crit["pmax"] = crit["pmax"], crit["pmin"]
+    from . import criteria_schema
+    raw = body.model_dump()
+    note = str(raw.pop("note", ""))[:290]
+    # normalize() coerces ranges/ints/multis and swaps an inverted range;
+    # from_legacy() lets an old flat payload keep working.
+    crit = criteria_schema.from_legacy(raw)
+    if note:
+        crit["note"] = note
     c.broker_criteria = crit
     db.commit()
     background.add_task(_sweep_criteria_async, t, c.id)
