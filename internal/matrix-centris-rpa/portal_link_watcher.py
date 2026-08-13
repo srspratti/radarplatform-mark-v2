@@ -30,12 +30,28 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import re
 import sys
 import time
 
 import httpx
+
+# Some Playwright installs ship only the full Chromium (no headless shell),
+# and Chromium refuses its sandbox when running as root (containers). Both
+# are environment quirks rather than script problems, so allow an explicit
+# binary and drop the sandbox only where it cannot work anyway.
+CHROMIUM_PATH = os.getenv("RADAR_CHROMIUM_PATH", "")
+
+
+def _launch(pw, headless: bool):
+    kw = {"headless": headless}
+    if CHROMIUM_PATH:
+        kw["executable_path"] = CHROMIUM_PATH
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        kw["args"] = ["--no-sandbox"]
+    return pw.chromium.launch(**kw)
 
 RX_LABELED = re.compile(r"(?:Centris|MLS)[^\d\n]{0,12}(\d{7,8})", re.I)
 RX_BARE = re.compile(r"(?<!\d)(\d{8})(?!\d)")
@@ -64,7 +80,7 @@ def render_page_text(url: str, headless: bool) -> str:
     attempted: a login/signin redirect raises RuntimeError instead."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = _launch(p, headless)
         page = browser.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         if any(k in page.url.lower() for k in ("login", "signin", "logon")):

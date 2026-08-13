@@ -199,22 +199,36 @@ function buildMerge(live, photos) {
       // enrichment from a Client Detailed PDF export (Listing.details)
       const det = r.details || {};
       const rooms = det.rooms || [];
+      // Identifier-only rows (numbers lifted from a printed portal page or
+      // the internal watcher) carry no facts yet. Marking them keeps the
+      // card from presenting the demo template's price/rooms/year as if
+      // they described this property — enrichment fills them in later.
+      const stub = !r.price && !r.address && !det.year;
       return {
         ...tpl,
+        stub,
+        // marks a row backed by the hub: the card then shows only fields the
+        // hub supplied, never the template's heating/garage/pool/fireplace
+        live: true,
         photos: (photos && photos[r.centris_no]) || [],
         id: r.centris_no,
         addr: r.address || `Inscription Centris ${r.centris_no}`,
-        area: r.area || tpl.area,
-        price: r.price || tpl.price,
-        evalMun: r.price ? Math.round(r.price * 0.86) : tpl.evalMun,
-        beds: r.beds || tpl.beds,
-        baths: r.baths || tpl.baths,
-        typeFr: r.prop_type || tpl.typeFr,
-        typeEn: r.prop_type || tpl.typeEn,
-        sqft: det.living_sqft || tpl.sqft,
-        year: det.year || tpl.year,
-        taxesMun: det.taxes_mun || Math.round((tpl.taxesMun || 3000) * priceRatio),
-        taxesScol: det.taxes_school || tpl.taxesScol,
+        area: r.area || "",
+        // Never inherit the template's price: a figure the hub does not have
+        // is the one number a client must not be shown. 0 → "prix à confirmer".
+        price: r.price || 0,
+        evalMun: r.price ? Math.round(r.price * 0.86) : 0,
+        // Same rule as the price: report what the hub actually knows. Zero /
+        // empty means "not known yet" and the card omits the row rather than
+        // borrowing the demo template's figure.
+        beds: r.beds || 0,
+        baths: r.baths || 0,
+        typeFr: r.prop_type || "",
+        typeEn: r.prop_type || "",
+        sqft: det.living_sqft || 0,
+        year: det.year || 0,
+        taxesMun: det.taxes_mun || 0,
+        taxesScol: det.taxes_school || 0,
         remarks: det.remarks || "",
         // real room dimensions (ft → m) feed the 3D plan generator
         ficheRooms: rooms.map((rm) => ({

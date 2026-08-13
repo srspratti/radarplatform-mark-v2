@@ -2475,12 +2475,19 @@ function browseRows(lang) {
     const m = BROWSE_META[l.id] || {};
     const pr = l.baths % 1 ? 1 : 0;
     return {
-      id: l.id, addr: l.addr, area: l.area, typeStr: (lang === "fr" ? l.typeFr : l.typeEn) + ` — ${l.year}`,
-      price: l.price, beds: l.beds, bathsStr: `${Math.floor(l.baths)}+${pr}`,
+      id: l.id, addr: l.addr, area: l.area,
+      // only the parts we actually know — an unknown type or year drops out
+      typeStr: [(lang === "fr" ? l.typeFr : l.typeEn), l.year || null]
+        .filter(Boolean).join(" — "),
+      price: l.price, beds: l.beds,
+      bathsStr: l.baths ? `${Math.floor(l.baths)}+${pr}` : "",
       heatStr: lang === "fr" ? HEAT[l.heating].fr : HEAT[l.heating].en,
       rooms: m.rooms, lot: m.lot, garage: /garage/i.test(l.parkFr), fire: !!m.fire, pool: /piscine/i.test(l.inclFr),
       badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: m.xy, full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
       centrisUrl: l.centrisUrl || "", photos: (featOn("listing_photos") && l.photos) || [],
+      // identifier-only row: the card shows "details coming" rather than the
+      // demo template's figures (see buildMerge in main.jsx)
+      stub: !!l.stub, live: !!l.live,
     };
   });
   const extra = EXTRA_LISTINGS.map((e) => ({
@@ -2500,7 +2507,8 @@ function ListingsView({ lang, onOpen, log }) {
   const rows = useMemo(() => browseRows(lang), [lang]);
   // Centris-field filters (sectors) — all on by default, individually
   // toggleable, with one-tap select-all / deselect-all.
-  const allAreas = useMemo(() => [...new Set(rows.map((r) => r.area))], [rows]);
+  const allAreas = useMemo(
+    () => [...new Set(rows.map((r) => r.area))].filter(Boolean), [rows]);
   const [offAreas, setOffAreas] = useState([]);
   const toggleArea = (a) => setOffAreas((cur) =>
     cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]);
@@ -2634,25 +2642,52 @@ function ListingsView({ lang, onOpen, log }) {
               </div>
               )}
               <div className="p-3.5">
+                {r.stub ? (
+                  /* Only the Centris number is known so far — show that
+                     plainly rather than borrowing another listing's facts. */
+                  <>
+                    <div style={{ fontFamily: F.disp, fontWeight: 700, fontSize: 15, color: C.ink }}>
+                      {t("Détails à venir", "Details coming")}
+                    </div>
+                    <div className="mt-1.5 rounded-xl px-3 py-2" style={{ background: C.snow, border: `1px solid ${C.line}`, fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+                      {t("Cette inscription vient d’être repérée pour vous. Les détails (prix, pièces, photos) s’ajoutent dès que la fiche complète est reçue.",
+                         "This listing was just spotted for you. The details (price, rooms, photos) appear as soon as the full sheet comes in.")}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between" style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub }}>
+                      <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.dateSent}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
                 <div className="flex items-baseline justify-between gap-2">
-                  <div style={{ fontFamily: F.mono, fontWeight: 600, fontSize: 22, color: C.metro }}>{fmt$(r.price, lang)}</div>
+                  {r.price > 0
+                    ? <div style={{ fontFamily: F.mono, fontWeight: 600, fontSize: 22, color: C.metro }}>{fmt$(r.price, lang)}</div>
+                    : <div style={{ fontFamily: F.disp, fontWeight: 700, fontSize: 15, color: C.sub }}>{t("Prix à confirmer", "Price to confirm")}</div>}
                   <div style={{ fontSize: 11.5, color: C.sub }}>{r.typeStr}</div>
                 </div>
                 <div className="mt-2 rounded-xl px-3 py-1.5" style={{ background: C.snow, border: `1px solid ${C.line}` }}>
-                  <Row label={t("Type de bâtiment", "Building Type")} value={t("Détaché", "Detached")} />
-                  <Row label={t("Pièces", "Rooms")} value={r.rooms} />
+                  {r.rooms && <Row label={t("Pièces", "Rooms")} value={r.rooms} />}
                   {r.lot && <Row label={t("Terrain", "Lot Area")} value={r.lot} />}
-                  <Row label={t("Chambres", "Bedrooms")} value={`${r.beds}+0`} />
-                  <Row label={t("Énergie/Chauffage", "Energy/Heating")} value={r.heatStr} />
-                  <Row label={t("SDB + salle d’eau", "Bath + PR")} value={r.bathsStr} />
-                  <Row label="Garage" value={yn(r.garage)} />
-                  <Row label={t("Foyer-poêle", "Fireplace-Stove")} value={yn(r.fire)} />
-                  <Row label={t("Piscine", "Pool")} value={yn(r.pool)} />
+                  {r.beds > 0 && <Row label={t("Chambres", "Bedrooms")} value={`${r.beds}+0`} />}
+                  {r.bathsStr && <Row label={t("SDB + salle d’eau", "Bath + PR")} value={r.bathsStr} />}
+                  {/* heating / garage / fireplace / pool are not carried by the
+                      alert or grid export — only claim them for demo rows */}
+                  {!r.live && <>
+                    <Row label={t("Type de bâtiment", "Building Type")} value={t("Détaché", "Detached")} />
+                    <Row label={t("Énergie/Chauffage", "Energy/Heating")} value={r.heatStr} />
+                    <Row label="Garage" value={yn(r.garage)} />
+                    <Row label={t("Foyer-poêle", "Fireplace-Stove")} value={yn(r.fire)} />
+                    <Row label={t("Piscine", "Pool")} value={yn(r.pool)} />
+                  </>}
                 </div>
                 <div className="mt-2 flex items-center justify-between" style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub }}>
                   <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.dateSent}</span>
                 </div>
-                <div className="mt-2.5"><OpenBtn r={r} /></div>
+                {/* the microsite is price-centric (hypothèque, projections,
+                    prix/pi²) — offer it only once the price is known */}
+                {r.price > 0 && <div className="mt-2.5"><OpenBtn r={r} /></div>}
+                  </>
+                )}
               </div>
             </div>
           ))}
