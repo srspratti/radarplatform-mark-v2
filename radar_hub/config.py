@@ -33,6 +33,15 @@ class Settings:
                                    "https://identity.crea.ca/connect/token")
     DDF_BASE: str = os.getenv("DDF_BASE", "https://ddfapi.realtor.ca/odata/v1")
 
+    # Source.immo (ID-3 Technologies) — certified Centris data distributor.
+    # The broker signs a Centris data-distribution authorization through
+    # Source.immo, who issue an account id + API key for their Immo
+    # Distribution API. Unset = the slot stays dormant.
+    SOURCEIMMO_ACCOUNT_ID: str = os.getenv("SOURCEIMMO_ACCOUNT_ID", "")
+    SOURCEIMMO_API_KEY: str = os.getenv("SOURCEIMMO_API_KEY", "")
+    SOURCEIMMO_BASE: str = os.getenv("SOURCEIMMO_BASE",
+                                     "https://api-v1.source.immo")
+
     # Matrix inbox (IMAP ingestion of Centris/Matrix notification emails)
     MATRIX_IMAP_HOST: str = os.getenv("MATRIX_IMAP_HOST", "")
     MATRIX_IMAP_USER: str = os.getenv("MATRIX_IMAP_USER", "")

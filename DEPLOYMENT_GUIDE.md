@@ -96,6 +96,7 @@ sed -i.bak "s/REPLACE_WITH_CLIENT_INTAKE_EMAIL/<paste-her-address>/" samples/mat
 | `FUB_API_KEY` | Follow Up Boss import + note writeback | FUB → Admin → API → Create key |
 | `GHL_API_KEY`, `GHL_LOCATION_ID` | GoHighLevel import + note writeback (same contract as FUB) — **and the SMS transport when Twilio is unset**: outbound SMS ride GHL's LC Phone (Twilio resold inside the subscription, Canadian numbers available without a Twilio account; threads land in the GHL inbox too). Voice calls stay Twilio-only. | GHL sub-account → Settings → **Private Integrations** → token with *View/Edit Contacts* + *Conversations/Messages* scopes; location id = sub-account id (Settings → Business Profile). For SMS: buy a number under Settings → **Phone Numbers** |
 | `DDF_CLIENT_ID/SECRET` | **Licensed** listing enrichment by MLS number (facts + photos, auto-applied to every alert listing) | The broker applies for a CREA **DDF®** feed (crea.ca → DDF® → National Shared Pool, destination "member tool") — CREA issues OAuth2 client credentials. Sweep: `POST /api/connectors/ddf/enrich` (schedule it, §7) |
+| `SOURCEIMMO_ACCOUNT_ID/API_KEY` | **Certified Centris distributor** enrichment (Centris-native facts + photos; composes with DDF® — already-enriched rows skipped) | The broker signs the Centris data-distribution authorization through source.immo (ID-3 Technologies); they issue the account id + API key. Sweep: `POST /api/connectors/sourceimmo/enrich` (schedule it, §7) |
 | `MATRIX_IMAP_HOST/USER/PASS` | Hub's IMAP poll of the alerts inbox | Gmail: enable 2FA → Security → **App passwords** → Mail. Host `imap.gmail.com` |
 | `INTAKE_EMAIL_MODE/USER/DOMAIN` | Shape of per-client intake addresses | `plus` + the same Gmail user (default) — or `alias` + a catch-all domain |
 | `VITRINE_WEBHOOK_SECRET` | HMAC on portal webhooks | `openssl rand -hex 24` (same-origin deploys work without it; set it anyway) |
@@ -255,6 +256,7 @@ Any cron (server, GitHub Actions, or a tiny Fly machine) hitting:
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/crm/sync   # CRM-agnostic: import + writebacks on FUB/GHL/…
 0 */4 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/enrich  # licensed DDF® enrichment (when configured)
 30 */4 * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/match   # licensed DDF® criteria sweep → fills client Vitrines from their saved prefs
+15 */4 * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/sourceimmo/enrich  # certified Centris distributor (when configured)
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Marketable]
 0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
 0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback

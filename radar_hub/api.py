@@ -300,6 +300,25 @@ def ddf_match(top: int = 20, db: Session = Depends(get_db),
     return ddf.match_criteria(db, t, top=top)
 
 
+@router.get("/connectors/sourceimmo/status", dependencies=[Depends(auth)])
+def sourceimmo_status():
+    from .connectors import source_immo
+    return {"configured": source_immo.SourceImmoClient().configured,
+            "how_to": "Distributeur certifié Centris (source.immo / ID-3): "
+                      "le courtier signe l'autorisation de distribution de "
+                      "données Centris, puis brancher SOURCEIMMO_ACCOUNT_ID/"
+                      "API_KEY."}
+
+
+@router.post("/connectors/sourceimmo/enrich", dependencies=[Depends(auth)])
+def sourceimmo_enrich(limit: int = 50, db: Session = Depends(get_db),
+                      t: str = Depends(tenant)):
+    """Certified-distributor sweep: Centris-native facts + photos by listing
+    number (composes with DDF® — already-enriched rows are skipped)."""
+    from .connectors import source_immo
+    return source_immo.sweep(db, t, limit=limit)
+
+
 @router.get("/connectors/crm/status", dependencies=[Depends(auth)])
 def crm_status():
     from .connectors import crm
