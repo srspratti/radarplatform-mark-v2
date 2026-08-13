@@ -71,6 +71,32 @@ python matrix_results_harvester.py --hub http://localhost:8000 \
 # … vérifier, puis --apply
 ```
 
+### Mode file — l'enrichissement sans intervention / hands-off enrichment
+
+🇫🇷 `--from-queue` enchaîne la **même file de liens de portail** que
+`portal_link_watcher.py` : chaque tâche porte l'URL *et* le client, donc rien
+n'est fourni à la main (`--contact-id` devient inutile) et chaque tâche est
+marquée `done`/`failed` en fin de traitement. Le script tourne **headless**
+par défaut : tant que le profil garde une session Matrix valide, aucune
+fenêtre ne s'ouvre — donc cron possible. Quand Matrix vous déconnecte, il
+rouvre une fenêtre et attend VOTRE connexion; c'est le seul moment humain qui
+reste, et il reste humain par choix.
+
+🇬🇧 `--from-queue` works the **same portal-link queue** the watcher fills:
+each task carries the URL *and* the client, so nothing is supplied by hand
+(`--contact-id` is unnecessary) and each task is marked `done`/`failed`.
+Runs **headless** by default — no window while the stored profile holds a
+valid Matrix session, so it can live in cron. When Matrix signs you out it
+reopens a window and waits for YOU; that is the one remaining human moment,
+kept human on purpose.
+
+```bash
+# la boucle complète, une fois les sélecteurs remplis :
+python portal_link_watcher.py     --hub $HUB --key $KEY --apply   # nºs
+python matrix_results_harvester.py --hub $HUB --key $KEY \
+       --format detailed --from-queue --apply                    # substance
+```
+
 Les sélecteurs `PLACEHOLDER_…` doivent être remplis contre le DOM réel
 (DevTools → clic droit sur l'élément → Copy selector) — ils varient selon la
 configuration du tableau. Cadence humaine intégrée (pauses aléatoires);
