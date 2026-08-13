@@ -107,7 +107,8 @@ def auto_provider() -> tuple[Provider | None, str]:
 
 
 # ------------------------------------------------------------------ sweep ---
-def _prefs_for(db: Session, tenant_id: str, c: Contact) -> dict | None:
+def client_prefs(db: Session, tenant_id: str, c: Contact) -> dict | None:
+    """What the CLIENT saved in the Vitrine (« Mes alertes »)."""
     kv = (db.query(PortalKV)
           .filter_by(tenant_id=tenant_id, token=c.portal_token,
                      key=PREFS_KEY).first())
@@ -117,6 +118,24 @@ def _prefs_for(db: Session, tenant_id: str, c: Contact) -> dict | None:
         return json.loads(kv.value).get("p") or {}
     except (ValueError, AttributeError):
         return None
+
+
+def criteria_sets(db: Session, tenant_id: str,
+                  c: Contact) -> list[tuple[str, dict]]:
+    """The two channels for one client, in precedence order.
+
+    "broker" is the curated search the broker set in /ops — their judgment,
+    the hub-side equivalent of a Matrix saved search. "client" is what the
+    client typed into the Vitrine. Either may be absent; when both match the
+    same listing it is stored once and attributed to the broker, since that
+    ran first."""
+    sets: list[tuple[str, dict]] = []
+    if isinstance(c.broker_criteria, dict) and c.broker_criteria:
+        sets.append(("broker", c.broker_criteria))
+    prefs = client_prefs(db, tenant_id, c)
+    if prefs is not None:
+        sets.append(("client", prefs))
+    return sets
 
 
 def match_criteria(db: Session, tenant_id: str, top: int = 20,
@@ -131,6 +150,7 @@ def match_criteria(db: Session, tenant_id: str, top: int = 20,
         return {"clients": 0, "matched": 0, "new": 0,
                 "provider": "aucun", "error": err}
     out: dict = {"clients": 0, "matched": 0, "new": 0,
+                 "broker_new": 0, "client_new": 0,
                  "provider": prov.name, "details": []}
     rows = [contact] if contact else (
         db.query(Contact)
@@ -140,19 +160,29 @@ def match_criteria(db: Session, tenant_id: str, top: int = 20,
     for c in rows:
         if not c or not c.portal_token:
             continue
-        prefs = _prefs_for(db, tenant_id, c)
-        if prefs is None:
+        sets = criteria_sets(db, tenant_id, c)
+        if not sets:
             continue
         out["clients"] += 1
-        try:
-            cards = prov.search(prefs, top)
-        except httpx.HTTPError as exc:
-            out["details"].append({"client": c.name, "error": str(exc)[:120]})
-            continue
-        r = store_listings(db, tenant_id, c, cards,
-                           raw_id=f"{prov.name}match-{c.id}")
-        out["matched"] += len(cards)
-        out["new"] += r["listings_new"]
-        out["details"].append({"client": c.name, "matched": len(cards),
-                               "new": r["listings_new"]})
+        for channel, prefs in sets:
+            try:
+                cards = prov.search(prefs, top)
+            except httpx.HTTPError as exc:
+                out["details"].append({"client": c.name, "channel": channel,
+                                       "error": str(exc)[:120]})
+                continue
+            # Which channel surfaced a listing is worth keeping: a broker's
+            # curated pick reads differently to the client than a match on
+            # their own filters.
+            cards = [dict(card, details={**(card.get("details") or {}),
+                                         "match_source": channel})
+                     for card in cards]
+            r = store_listings(db, tenant_id, c, cards,
+                               raw_id=f"{prov.name}match-{channel}-{c.id}")
+            out["matched"] += len(cards)
+            out["new"] += r["listings_new"]
+            out[f"{channel}_new"] += r["listings_new"]
+            out["details"].append({"client": c.name, "channel": channel,
+                                   "matched": len(cards),
+                                   "new": r["listings_new"]})
     return out

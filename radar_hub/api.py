@@ -232,6 +232,63 @@ def client_detail(contact_id: int, db: Session = Depends(get_db),
     return _client_rich(db, t, c)
 
 
+class BrokerCriteriaIn(BaseModel):
+    """The broker's curated search for one client — the hub-side equivalent
+    of a Matrix saved search."""
+    pmin: int = 0
+    pmax: int = 0
+    beds: int = 0
+    baths: int = 0
+    areas: list[str] = []
+    types: list[str] = []
+    note: str = ""      # why the broker set it this way
+
+
+@router.get("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_get(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Both channels side by side: what the broker curated, what the client
+    asked for. Either may be null."""
+    from .connectors import criteria as crit
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    prov, err = crit.auto_provider()
+    return {"broker": c.broker_criteria or None,
+            "client": crit.client_prefs(db, t, c),
+            "provider": prov.name if prov else "aucun",
+            "error": err or None}
+
+
+@router.put("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_put(contact_id: int, body: BrokerCriteriaIn,
+                 background: BackgroundTasks, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Set the broker's curated search and sweep for it right away."""
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    crit = body.model_dump()
+    if crit["pmax"] and crit["pmin"] > crit["pmax"]:
+        crit["pmin"], crit["pmax"] = crit["pmax"], crit["pmin"]
+    c.broker_criteria = crit
+    db.commit()
+    background.add_task(_sweep_criteria_async, t, c.id)
+    return {"contact_id": c.id, "broker": crit}
+
+
+@router.delete("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_del(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Drop the curated search; the client's own criteria keep running."""
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    c.broker_criteria = None
+    db.commit()
+    return {"contact_id": c.id, "broker": None}
+
+
 @router.get("/dashboard/clients-rich", dependencies=[Depends(auth)])
 def clients_rich(db: Session = Depends(get_db), t: str = Depends(tenant)):
     """One call for the realtor dashboard adapter: every client with timeline,

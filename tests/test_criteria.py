@@ -100,6 +100,80 @@ def test_saving_criteria_triggers_immediate_sweep(client, db, demo_on):
     assert db.query(Listing).count() == before
 
 
+def test_broker_criteria_run_alongside_client_criteria(client, db, demo_on):
+    """Two channels, one client: the broker's curated search and the client's
+    own both feed the portal, and each match records which one found it."""
+    c = _client_with_prefs(client, db, name="Deux canaux",
+                           phone="514 555 0321")
+    r = client.put(f"/api/clients/{c['id']}/criteria", json={
+        "pmin": 800000, "pmax": 950000, "beds": 4,
+        "areas": ["Westmount"],
+        "note": "elle dit 3 cc, mais un 4 cc à Westmount lui conviendrait"})
+    assert r.status_code == 200
+    assert r.json()["broker"]["note"].startswith("elle dit")
+    # the PUT swept immediately, and that sweep runs BOTH of the client's
+    # channels — so the portal already holds curated and self-service rows,
+    # each stamped with the channel that found it
+    rows = db.query(Listing).filter_by(contact_id=c["id"]).all()
+    by_source: dict[str, list] = {}
+    for x in rows:
+        by_source.setdefault(x.details.get("match_source"), []).append(x)
+    assert set(by_source) == {"broker", "client"}
+    assert all(x.area == "Westmount" for x in by_source["broker"])
+    assert all(800000 <= x.price <= 950000 for x in by_source["broker"])
+    assert all(x.area in ("Rosemont", "Villeray")
+               for x in by_source["client"])
+    # a later cron sweep sees both channels and adds nothing new
+    out = client.post("/api/connectors/criteria/match").json()
+    assert {d["channel"] for d in out["details"]} == {"broker", "client"}
+    assert out["clients"] == 1 and out["new"] == 0
+    # both views are readable side by side
+    g = client.get(f"/api/clients/{c['id']}/criteria").json()
+    assert g["broker"]["areas"] == ["Westmount"]
+    assert g["client"]["areas"] == ["Rosemont", "Villeray"]
+    assert g["provider"] == "demo"
+
+
+def test_broker_criteria_survive_without_client_criteria(client, db, demo_on):
+    """A client who never opened their portal still gets curated matches."""
+    lead = client.post("/api/leads", json={
+        "name": "Jamais ouvert", "phone": "514 555 0322",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    client.put(f"/api/clients/{c['id']}/criteria",
+               json={"pmin": 300000, "pmax": 400000, "beds": 2,
+                     "areas": ["Longueuil"]})
+    out = client.post("/api/connectors/criteria/match").json()
+    assert out["clients"] == 1
+    assert [d["channel"] for d in out["details"]] == ["broker"]
+    assert db.query(Listing).filter_by(contact_id=c["id"]).count() > 0
+    # pmin/pmax swapped by mistake → normalised, not rejected
+    r = client.put(f"/api/clients/{c['id']}/criteria",
+                   json={"pmin": 900000, "pmax": 500000}).json()
+    assert r["broker"]["pmin"] == 500000 and r["broker"]["pmax"] == 900000
+    # clearing the curated set leaves the client's own untouched
+    client.delete(f"/api/clients/{c['id']}/criteria")
+    assert client.get(f"/api/clients/{c['id']}/criteria").json()["broker"] is None
+    out2 = client.post("/api/connectors/criteria/match").json()
+    assert out2["clients"] == 0     # no criteria left for this client at all
+
+
+def test_broker_criteria_are_not_reachable_from_the_portal(client, db,
+                                                           demo_on):
+    """The curated set is broker-only: the portal KV surface can't read or
+    overwrite it."""
+    c = _client_with_prefs(client, db, name="Cloison", phone="514 555 0323")
+    client.put(f"/api/clients/{c['id']}/criteria",
+               json={"pmin": 100, "pmax": 200, "areas": ["Secret"]})
+    tok = c["portal_token"]
+    assert client.get(f"/api/vitrine/storage/{tok}/broker_criteria"
+                      ).status_code == 404
+    # writing that key from the portal touches KV only, never the column
+    client.put(f"/api/vitrine/storage/{tok}/broker_criteria",
+               json={"value": '{"pmin": 999}'})
+    assert db.get(Contact, c["id"]).broker_criteria["areas"] == ["Secret"]
+
+
 def test_sweep_can_target_one_client(client, db, demo_on):
     c1 = _client_with_prefs(client, db, name="Un", phone="514 555 0313")
     _client_with_prefs(client, db, name="Deux", phone="514 555 0314")

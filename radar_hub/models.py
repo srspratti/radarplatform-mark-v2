@@ -52,6 +52,12 @@ class Contact(Base):
     intake_email: Mapped[str] = mapped_column(String(200), default="", index=True)  # per-client Matrix CC
     fub_person_id: Mapped[str] = mapped_column(String(40), default="", index=True)
     ghl_contact_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # The broker's CURATED search for this client — their professional
+    # judgment, the hub-side equivalent of a Matrix saved search. Runs
+    # alongside (not instead of) the client's own Vitrine criteria, which
+    # live in PortalKV where the client can edit them. Broker-only: never
+    # exposed on the portal endpoints.
+    broker_criteria: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     converted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     __table_args__ = (Index("ix_contact_tenant_email", "tenant_id", "email"),)
@@ -339,6 +345,8 @@ def _migrate_contacts() -> None:
         added.append("ALTER TABLE contacts ADD COLUMN campaign VARCHAR(120) DEFAULT ''")
     if "ghl_contact_id" not in cols:
         added.append("ALTER TABLE contacts ADD COLUMN ghl_contact_id VARCHAR(64) DEFAULT ''")
+    if "broker_criteria" not in cols:
+        added.append("ALTER TABLE contacts ADD COLUMN broker_criteria JSON")
     lcols = {c["name"] for c in inspect(engine).get_columns("listings")}
     if "details" not in lcols:
         added.append("ALTER TABLE listings ADD COLUMN details JSON")

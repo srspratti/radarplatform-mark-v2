@@ -392,6 +392,67 @@ function ConsentPanel({cid, toast}) {
   </div>;
 }
 
+function CriteriaPanel({cid, toast}) {
+  const [d,setD]=useState(null); const [busy,setBusy]=useState(false);
+  const load=useCallback(async()=>{ try{ setD(await api(`/clients/${cid}/criteria`)); }catch(e){} },[cid]);
+  useEffect(()=>{ load(); },[load]);
+  const fmt=(c)=> !c ? T("—","—")
+    : [c.pmin||c.pmax ? `${(c.pmin||0).toLocaleString()}–${(c.pmax||0).toLocaleString()} $` : null,
+       c.beds ? `${c.beds}+ cc` : null, c.baths ? `${c.baths}+ sdb` : null,
+       (c.areas||[]).join(", ")||null].filter(Boolean).join(" · ");
+  const edit=async()=>{
+    const b=(d&&d.broker)||{};
+    const ask=(q,v)=>window.prompt(q, v==null?"":String(v));
+    const pmin=ask(T("Prix minimum ($) :","Minimum price ($):"), b.pmin||0); if (pmin===null) return;
+    const pmax=ask(T("Prix maximum ($) :","Maximum price ($):"), b.pmax||0); if (pmax===null) return;
+    const beds=ask(T("Chambres (minimum) :","Bedrooms (minimum):"), b.beds||0); if (beds===null) return;
+    const areas=ask(T("Secteurs, séparés par des virgules :","Sectors, comma-separated:"), (b.areas||[]).join(", ")); if (areas===null) return;
+    const note=ask(T("Note (pourquoi ces critères) :","Note (why these criteria):"), b.note||"")||"";
+    setBusy(true);
+    try{ const r=await api(`/clients/${cid}/criteria`,{method:"PUT",
+      body:JSON.stringify({pmin:+pmin||0, pmax:+pmax||0, beds:+beds||0,
+        areas:areas.split(",").map(s=>s.trim()).filter(Boolean), note})});
+      toast(T("Recherche curée enregistrée — balayage lancé","Curated search saved — sweep running"));
+      setD(x=>({...(x||{}), broker:r.broker})); }
+    catch(e){ toast(e.message,true); } finally{ setBusy(false); } };
+  const clear=async()=>{
+    if (!window.confirm(T("Retirer la recherche curée ? Les critères du client continuent de tourner.",
+                          "Remove the curated search? The client's own criteria keep running."))) return;
+    try{ await api(`/clients/${cid}/criteria`,{method:"DELETE"});
+      toast(T("Recherche curée retirée","Curated search removed")); load(); }
+    catch(e){ toast(e.message,true);} };
+  if (!d) return null;
+  return <div className="panel p-3 mt-3">
+    <div className="flex items-center justify-between mb-2">
+      <div className="mono text-[10px] amber">{T("▮ CRITÈRES DE RECHERCHE — curés + client","▮ SEARCH CRITERIA — curated + client")}</div>
+      <div className="flex gap-2">
+        <button disabled={busy} onClick={edit} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)] disabled:opacity-40">
+          {d.broker?T("✎ Modifier","✎ Edit"):T("➕ Définir","➕ Set")}</button>
+        {d.broker && <button onClick={clear} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-red-400">✖</button>}
+      </div>
+    </div>
+    <div className="mono text-[10px] py-1 border-b border-[var(--line)]/30 flex gap-2">
+      <span className="text-[var(--amber)] shrink-0">{T("Courtier","Broker")}</span>
+      <span className="flex-1 truncate">{fmt(d.broker)}</span>
+    </div>
+    {d.broker && d.broker.note && <div className="text-[10px] text-[var(--mute)] italic py-1">« {d.broker.note} »</div>}
+    <div className="mono text-[10px] py-1 flex gap-2">
+      <span className="text-sky-300 shrink-0">{T("Client","Client")}</span>
+      <span className="flex-1 truncate">{d.client?fmt(d.client):T("aucun critère enregistré au portail","no criteria saved in the portal")}</span>
+    </div>
+    <div className="mono text-[10px] text-[var(--mute)] mt-2">
+      {d.provider==="aucun"
+        ? T(`Aucun flux branché (${d.error||""}) — les critères sont conservés et s'activeront dès le DDF®/Source.immo.`,
+            `No feed connected (${d.error||""}) — criteria are kept and activate as soon as DDF®/Source.immo is wired.`)
+        : d.provider==="demo"
+          ? T("Fournisseur DÉMO actif — fiches fabriquées (nº 99xxxxxx, « (démo) »). Mettre criteria_demo_provider=false en production.",
+              "DEMO provider active — fabricated listings (99xxxxxx, '(démo)'). Set criteria_demo_provider=false in production.")
+          : T(`Flux « ${d.provider} » — les deux jeux tournent au balayage; enregistrer relance tout de suite.`,
+              `Feed '${d.provider}' — both sets run on each sweep; saving triggers one immediately.`)}
+    </div>
+  </div>;
+}
+
 function ContactsView({toast, on, feats}) {
   const [contacts,setContacts]=useState([]); const [sel,setSel]=useState(null);
   const [digest,setDigest]=useState(""); const [toolOut,setToolOut]=useState("");
@@ -628,6 +689,7 @@ function ContactsView({toast, on, feats}) {
                "In Matrix: results → Select all → Print PDF. Grid (my:Partial) = creates the listings · 'Client Detailed with Photo Album' = ENRICHES them (year, rooms → 3D plan, taxes, description, photos). Also automatic: email the PDF to the client's intake address.")}
           </div>
         </div>
+        {sel.lifecycle==="client" && <CriteriaPanel cid={sel.id} toast={toast}/>}
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}
         <div className="panel p-3 mt-3">
           <div className="mono text-[10px] amber mb-2">{T("▮ CHRONOLOGIE UNIFIÉE — Vitrine + Matrix + FUB + Hub","▮ UNIFIED TIMELINE — Vitrine + Matrix + FUB + Hub")}</div>
