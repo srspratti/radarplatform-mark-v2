@@ -457,6 +457,38 @@ def process_raw_email(db: Session, tenant_id: str, raw: str,
     return out
 
 
+def message_text(msg) -> tuple[str, list[bytes]]:
+    """Readable text + PDF attachments for one MIME message.
+
+    Board templates (CoreLogic) put the « View All Listings » URL only in
+    the text/html part — the text/plain alternative spells out just the
+    unsubscribe link. So hrefs from HTML parts are appended as bare lines:
+    the link queue sees the portal URL, and the line-based parsers are
+    undisturbed."""
+    text, html = "", ""
+    pdfs: list[bytes] = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain":
+                text += part.get_content()
+            elif ct == "text/html":
+                html += part.get_content()
+            elif ct == "application/pdf":
+                blob = part.get_payload(decode=True)
+                if blob:
+                    pdfs.append(blob)
+    elif msg.get_content_type() == "text/html":
+        html = msg.get_content()
+    else:
+        text = msg.get_content()
+    if html:
+        hrefs = re.findall(r"href=['\"]([^'\"]+)['\"]", html, re.I)
+        if hrefs:
+            text += "\n" + "\n".join(hrefs[:50])
+    return text, pdfs
+
+
 def poll_matrix_inbox(db: Session, tenant_id: str) -> dict:
     """IMAP pull of unseen Matrix notifications. Same pattern as Radar Acheteur."""
     if not (settings.MATRIX_IMAP_HOST and settings.MATRIX_IMAP_USER):
@@ -480,18 +512,7 @@ def poll_matrix_inbox(db: Session, tenant_id: str) -> dict:
     for mid in ids[:50]:
         _, msg_data = box.fetch(mid, "(RFC822)")
         msg = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
-        text = ""
-        pdfs: list[bytes] = []
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    text += part.get_content()
-                elif part.get_content_type() == "application/pdf":
-                    blob = part.get_payload(decode=True)
-                    if blob:
-                        pdfs.append(blob)
-        else:
-            text = msg.get_content()
+        text, pdfs = message_text(msg)
         headers = (f"To: {msg.get('To', '')}\nCc: {msg.get('Cc', '')}\n"
                    f"Delivered-To: {msg.get('Delivered-To', '')}\n"
                    f"Subject: {msg.get('Subject', '')}\n")

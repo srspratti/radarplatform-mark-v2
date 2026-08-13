@@ -78,6 +78,38 @@ def test_unsubscribe_link_is_never_queued(client, db):
             .filter_by(tenant_id=T, contact_id=c2["id"]).count()) == 0
 
 
+def test_html_only_button_href_is_seen(client, db):
+    """Seen live: CoreLogic's multipart template carries the « View All
+    Listings » URL ONLY as an href in the text/html part — the text/plain
+    alternative spells out just the unsubscribe link. message_text() must
+    surface the href so the queue gets the portal URL."""
+    from email.message import EmailMessage
+    from radar_hub.connectors.matrix_email import message_text
+    c, intake = _client_with_intake(client, db, name="HTML Only",
+                                    phone="514 555 0148")
+    unsub = ("https://matrix.centris.ca/Matrix/Public/"
+             "UnsubscribeDirectEmail.aspx?ID=14804704016-1&Eml=YWJj")
+    msg = EmailMessage()
+    msg["To"] = intake
+    msg["Subject"] = "Your Portal has new listings"
+    msg.set_content(  # text/plain — no portal URL, unsubscribe only
+        "Click the following link to view the listings:\nView All Listings\n"
+        f"Click this link if you wish to Unsubscribe. {unsub}\n")
+    msg.add_alternative(  # text/html — the button carries the real URL
+        '<p>Click the following link to view the listings:</p>'
+        f'<a href="{PORTAL_URL.replace("&", "&amp;")}">View All Listings</a>'
+        f'<p><a href="{unsub}">Click this link if you wish to Unsubscribe.'
+        '</a></p>', subtype="html")
+    text, pdfs = message_text(msg)
+    assert PORTAL_URL.replace("&", "&amp;") in text and not pdfs
+    raw = f"To: {intake}\nSubject: {msg['Subject']}\n\n{text}"
+    out = process_raw_email(db, T, raw, raw_id="lq-html-1")
+    assert out["link_queued"] is True
+    row = (db.query(MatrixLinkTask)
+           .filter_by(tenant_id=T, contact_id=c["id"]).one())
+    assert row.url == PORTAL_URL      # &amp; decoded, unsubscribe ignored
+
+
 def test_email_without_portal_link_queues_nothing(client, db):
     c, intake = _client_with_intake(client, db, name="No Link",
                                     phone="514 555 0143")
