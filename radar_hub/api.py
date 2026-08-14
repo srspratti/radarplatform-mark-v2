@@ -1574,8 +1574,61 @@ def vitrine_listings(token: str, db: Session = Depends(get_db)):
     return [{"centris_no": r.centris_no, "address": r.address, "area": r.area,
              "price": r.price, "beds": r.beds, "baths": r.baths,
              "prop_type": r.prop_type, "url": r.url,
+             # enrichment (PDF / DDF / summary sweep): year, taxes, rooms →
+             # 3D plan, remarks, inclusions, agency, date_sent…
              "details": r.details or {},
              "received_at": r.received_at.isoformat()} for r in rows]
+
+
+class PortalVisitsIn(BaseModel):
+    """Visitors read off the broker's own Matrix dashboard (« Recent Portal
+    Visitors ») by the internal watcher. Names are matched to contacts;
+    matches feed the engagement timeline + the news feed."""
+    visits: list[dict]      # [{"name": "...", "date": "2026-08-14"?}]
+
+
+@router.post("/connectors/matrix/portal-visits", dependencies=[Depends(auth)])
+def matrix_portal_visits(body: PortalVisitsIn, db: Session = Depends(get_db),
+                         t: str = Depends(tenant)):
+    """Record Matrix-side portal visits: one portal.session_started event per
+    contact per day (idempotent) + a news row « <date> — <contact> a visité
+    le portail ». Unmatched names are returned, never guessed."""
+    from datetime import date as _date
+    matched, unmatched, created = [], [], 0
+    contacts = db.query(Contact).filter_by(tenant_id=t).all()
+    by_name = { (c.name or "").strip().lower(): c for c in contacts }
+    for v in body.visits[:100]:
+        name = str(v.get("name", "")).strip()
+        if not name:
+            continue
+        c = by_name.get(name.lower())
+        if not c:   # tolerant second pass: unaccented, loose containment
+            import unicodedata
+            def _fold(s):
+                return unicodedata.normalize("NFD", s.lower()) \
+                    .encode("ascii", "ignore").decode()
+            c = next((x for k, x in by_name.items()
+                      if k and (_fold(k) == _fold(name)
+                                or _fold(name) in _fold(k))), None)
+        if not c:
+            unmatched.append(name[:80])
+            continue
+        day = str(v.get("date") or _date.today().isoformat())[:10]
+        _, new = ingest_event(
+            db, tenant_id=t, contact_id=c.id, etype="portal.session_started",
+            actor="client", origin="matrix",
+            payload={"source": "matrix_portal", "date": day},
+            idempotency_key=f"mxpv-{c.id}-{day}")
+        if new:
+            created += 1
+            db.add(NotificationItem(
+                tenant_id=t, contact_id=c.id, kind="visit",
+                title=f"{day} — {c.name} a visité le portail",
+                body="Vu sur le tableau Matrix (Recent Portal Visitors)"))
+            db.commit()
+        matched.append({"name": c.name, "date": day, "new": new})
+    return {"matched": matched, "unmatched": unmatched,
+            "events_new": created}
 
 
 class NoteMarkIn(BaseModel):
