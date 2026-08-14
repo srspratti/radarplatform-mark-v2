@@ -229,6 +229,7 @@ fly secrets set \
   TWILIO_SID=… TWILIO_TOKEN=… TWILIO_FROM=… \
   ELEVENLABS_API_KEY=… ELEVENLABS_VOICE_ID=… \
   SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=… SMTP_PASS=… SMTP_FROM=… \
+  RADAR_TOKEN_SECRET="$(openssl rand -hex 24)" RADAR_CORS_ORIGINS= \
   RADAR_PUBLIC_URL=https://<app>.fly.dev \
   IMAP_HOST=imap.gmail.com IMAP_USER=… IMAP_PASS=…        # [Marketable]
 # add DDF_CLIENT_ID/SECRET when the CREA DDF® credentials arrive
