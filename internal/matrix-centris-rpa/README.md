@@ -179,3 +179,26 @@ courriels du courtier seulement, cadence humaine, jamais conteneurisé ni
 distribué. / Same rules as the rest of this folder: internal edition only,
 the broker's own account and emails only, human-paced, never containerized
 or distributed.
+
+
+## Visiteurs du tableau Matrix / Matrix dashboard visitors
+
+🇫🇷 `matrix_dashboard_watcher.py` lit le panneau « Recent Portal Visitors »
+du tableau de bord Matrix (VOTRE session — profil persistant partagé avec le
+harvester, connexion jamais automatisée) et renvoie les visites au hub :
+chaque nom apparié devient un événement d'engagement (1×/jour, idempotent)
+plus une ligne de nouvelles « <date> — <contact> a visité le portail » dans
+le fil de notifications. Dry-run par défaut (affiche la section brute).
+
+🇬🇧 `matrix_dashboard_watcher.py` reads the Matrix dashboard's "Recent
+Portal Visitors" panel (YOUR session — persistent profile shared with the
+harvester, login never automated) and posts visits to the hub: each matched
+name becomes an engagement event (once per day, idempotent) plus the news
+row "<date> — <contact> visited the portal". Dry-run prints the raw panel.
+
+```bash
+python matrix_dashboard_watcher.py --hub http://localhost:8000 \
+  --key $RADAR_API_KEY --headed \
+  --url "https://matrix.centris.ca/Matrix/Default.aspx"      # dry-run
+# … vérifier, puis --apply · cron doux 1-3×/jour une fois la session tenue
+```

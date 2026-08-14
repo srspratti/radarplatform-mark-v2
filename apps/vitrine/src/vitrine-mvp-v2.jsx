@@ -1766,6 +1766,29 @@ function ProspectView({ l, lang, log, reaction, setReaction, chat, setChat, dm, 
           <section className="rounded-2xl p-4 sm:p-5 lg:col-span-2" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
             <SectionHead icon={FileText} title={t("Description de la fiche", "Listing description")} note={t("texte du courtier inscripteur", "listing broker's text")} />
             <p style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.65, margin: 0, whiteSpace: "pre-wrap" }}>{l.remarks}</p>
+            {l.addendum && (
+              <p style={{ fontSize: 13, color: C.sub, lineHeight: 1.6, margin: "10px 0 0", whiteSpace: "pre-wrap" }}>{l.addendum}</p>
+            )}
+          </section>
+        )}
+        {(l.inclusions || l.exclusions) && (
+          <section className="rounded-2xl p-4 sm:p-5 lg:col-span-2" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+            <SectionHead icon={Check} title={t("Inclusions et exclusions", "Inclusions & exclusions")} note={t("selon la fiche", "per the listing")} />
+            {l.inclusions && (
+              <p style={{ fontSize: 13, color: C.ink, lineHeight: 1.6, margin: 0 }}>
+                <b style={{ color: C.spruce }}>{t("Inclus : ", "Included: ")}</b>{l.inclusions}
+              </p>
+            )}
+            {l.exclusions && (
+              <p style={{ fontSize: 13, color: C.ink, lineHeight: 1.6, margin: l.inclusions ? "8px 0 0" : 0 }}>
+                <b style={{ color: "#B4552D" }}>{t("Exclus : ", "Excluded: ")}</b>{l.exclusions}
+              </p>
+            )}
+            {l.agency && (
+              <p style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub, margin: "10px 0 0" }}>
+                {t("Source : ", "Source: ")}{l.agency}{l.dateSent ? ` · ${t("reçue le", "sent")} ${l.dateSent}` : ""}
+              </p>
+            )}
           </section>
         )}
         <CostSection l={l} lang={lang} log={log} refEl={refs.cout} />
@@ -2498,6 +2521,13 @@ function browseRows(lang) {
       // identifier-only row: the card shows "details coming" rather than the
       // demo template's figures (see buildMerge in main.jsx)
       stub: !!l.stub, live: !!l.live,
+      // summary-sweep extras (live rows) — filters, sorting, sections
+      inclusions: l.inclusions || "", exclusions: l.exclusions || "",
+      addendum: l.addendum || "", agency: l.agency || "",
+      liveDateSent: l.live ? (l.dateSent || "") : (m.dateSent || ""),
+      styleStr: l.styleStr || "", propertyUse: l.propertyUse || "",
+      heatingStr2: l.heatingStr || "", waterAccess: l.waterAccess || "",
+      fireplaceStr: l.fireplaceStr || "", remarks: l.remarks || "",
     };
   });
   const extra = EXTRA_LISTINGS.map((e) => ({
@@ -2522,7 +2552,45 @@ function ListingsView({ lang, onOpen, log }) {
   const [offAreas, setOffAreas] = useState([]);
   const toggleArea = (a) => setOffAreas((cur) =>
     cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]);
-  const shown = rows.filter((r) => !offAreas.includes(r.area));
+  // Centris-style toolbar: sort (Date Sent / Price / Municipality), property
+  // categories, and a free-text filter that also searches the summary-sweep
+  // texts (inclusions, exclusions, addendum, remarks).
+  const [sortBy, setSortBy] = useState("date");
+  const [cat, setCat] = useState("all");
+  const [q, setQ] = useState("");
+  const fold = (s) => (s || "").toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const catOf = (r) => {
+    const s = fold(`${r.styleStr} ${r.typeStr} ${r.propertyUse}`);
+    if (/commercial|industri|business/.test(s)) return "commercial";
+    if (/plex|revenu|revenue|logement/.test(s)) return "plex";
+    if (/condo|copropri|apartment|appartement|divise/.test(s)) return "condo";
+    if (/terrain|land|lot vacant/.test(s)) return "land";
+    if (r.condo) return "condo";
+    return "single";
+  };
+  const CATS = [["all", t("Tous", "All")],
+    ["single", t("Unifamiliale", "Single-Family")],
+    ["condo", t("Copropriété", "Condo")],
+    ["plex", t("Plex / Revenus", "Plex / Revenue")],
+    ["commercial", t("Commercial", "Commercial")],
+    ["land", t("Terrain", "Land/Lot")]];
+  const SORTS = [["date", t("Reçue (récent)", "Date Sent (new)")],
+    ["price_asc", t("Prix ↑", "Price ↑")],
+    ["price_desc", t("Prix ↓", "Price ↓")],
+    ["muni", t("Municipalité", "Municipality")]];
+  const qf = fold(q.trim());
+  const shown = rows
+    .filter((r) => !offAreas.includes(r.area))
+    .filter((r) => cat === "all" || catOf(r) === cat)
+    .filter((r) => !qf || fold([r.addr, r.area, r.inclusions, r.exclusions,
+      r.addendum, r.remarks, r.styleStr, r.agency].join(" ")).includes(qf))
+    .sort((a, b) => {
+      if (sortBy === "price_asc") return (a.price || 9e9) - (b.price || 9e9);
+      if (sortBy === "price_desc") return (b.price || 0) - (a.price || 0);
+      if (sortBy === "muni") return (a.area || "").localeCompare(b.area || "");
+      return (b.liveDateSent || "").localeCompare(a.liveDateSent || "");
+    });
   const selRow = shown.find((r) => r.id === sel) || null;
 
   const Row = ({ label, value }) => (
@@ -2597,9 +2665,31 @@ function ListingsView({ lang, onOpen, log }) {
           </button>
         </span>
       </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub, textTransform: "uppercase", letterSpacing: ".1em" }}>{t("Catégorie", "Category")}</span>
+        {CATS.map(([k, label]) => (
+          <button key={k} onClick={() => setCat(k)} className="rounded-full px-3 py-1.5"
+            style={{ background: cat === k ? C.metroSoft : C.paper, color: cat === k ? C.metro : C.sub, border: `1.5px solid ${cat === k ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub, textTransform: "uppercase", letterSpacing: ".1em" }}>{t("Trier", "Sort")}</span>
+        {SORTS.map(([k, label]) => (
+          <button key={k} onClick={() => setSortBy(k)} className="rounded-full px-3 py-1.5"
+            style={{ background: sortBy === k ? C.metroSoft : C.paper, color: sortBy === k ? C.metro : C.sub, border: `1.5px solid ${sortBy === k ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+            {label}
+          </button>
+        ))}
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder={t("Filtrer : piscine, foyer, cul-de-sac…", "Filter: pool, fireplace, cul-de-sac…")}
+          className="rounded-full px-3 py-1.5" style={{ border: `1.5px solid ${C.line}`, background: C.paper, fontSize: 12.5, minWidth: 210, color: C.ink }} />
+        {q && <button onClick={() => setQ("")} style={{ background: "transparent", border: 0, fontSize: 12, fontWeight: 700, color: C.sub }}>✕</button>}
+      </div>
       {shown.length === 0 && (
         <div className="mt-6 rounded-2xl p-6 text-center" style={{ background: C.paper, border: `1.5px dashed ${C.line}`, color: C.sub, fontSize: 13 }}>
-          {t("Aucun secteur sélectionné — réactivez un filtre pour voir les inscriptions.", "No area selected — turn a filter back on to see the listings.")}
+          {t("Aucune inscription ne passe ces filtres — élargissez la catégorie, le texte ou les secteurs.", "No listing matches these filters — widen the category, text or areas.")}
         </div>
       )}
 
@@ -2664,7 +2754,7 @@ function ListingsView({ lang, onOpen, log }) {
                          "This listing was just spotted for you. The details (price, rooms, photos) appear as soon as the full sheet comes in.")}
                     </div>
                     <div className="mt-2 flex items-center justify-between" style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub }}>
-                      <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.dateSent}</span>
+                      <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.liveDateSent || r.dateSent}</span>
                     </div>
                   </>
                 ) : (
@@ -2691,7 +2781,7 @@ function ListingsView({ lang, onOpen, log }) {
                   </>}
                 </div>
                 <div className="mt-2 flex items-center justify-between" style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub }}>
-                  <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.dateSent}</span>
+                  <span>Centris nº {r.id}</span><span>{t("Reçue le", "Sent")} {r.liveDateSent || r.dateSent}</span>
                 </div>
                 {/* the microsite is price-centric (hypothèque, projections,
                     prix/pi²) — offer it only once the price is known */}

@@ -230,6 +230,19 @@ function buildMerge(live, photos) {
         taxesMun: det.taxes_mun || 0,
         taxesScol: det.taxes_school || 0,
         remarks: det.remarks || "",
+        // summary-sweep extras: filters/sorting + microsite sections
+        inclusions: det.inclusions || "",
+        exclusions: det.exclusions || "",
+        addendum: det.addendum || "",
+        agency: det.agency || "",
+        dateSent: det.date_sent || (r.received_at || "").slice(0, 10),
+        styleStr: det.style || "",
+        propertyUse: det.property_use || "",
+        heatingStr: det.heating || "",
+        waterAccess: det.water_access || "",
+        fireplaceStr: det.fireplace || "",
+        parkingStr: det.parking || "",
+        zoning: det.zoning || "",
         // real room dimensions (ft → m) feed the 3D plan generator
         ficheRooms: rooms.map((rm) => ({
           name: rm.name,

@@ -327,3 +327,46 @@ def test_summary_parser_full_residential_sheet(client, db):
     assert row.details["date_sent"] == "2026-08-12"
     assert (db.query(ListingPhoto)
             .filter_by(tenant_id=T, centris_no="21004507").count()) == 1
+
+
+def test_portal_visits_endpoint_and_dashboard_parser(client, db):
+    """Matrix-observed visits: name matching (accent-tolerant), one event per
+    contact per day, a news row, unmatched names returned — plus the internal
+    dashboard watcher's tolerant name/date pairing."""
+    import importlib.util
+    from radar_hub.models import Event, NotificationItem
+    lead = client.post("/api/leads", json={
+        "name": "Sree Pratti", "phone": "514 555 0181",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    r = client.post("/api/connectors/matrix/portal-visits", json={
+        "visits": [{"name": "sree pratti", "date": "2026-08-14"},
+                   {"name": "Sree Pratti", "date": "2026-08-14"},   # dup day
+                   {"name": "Personne Inconnue", "date": "2026-08-14"}]}).json()
+    assert r["events_new"] == 1
+    assert r["unmatched"] == ["Personne Inconnue"]
+    evs = (db.query(Event)
+           .filter_by(contact_id=c["id"], type="portal.session_started").all())
+    assert len(evs) == 1 and evs[0].origin == "matrix"
+    notes = db.query(NotificationItem).filter_by(contact_id=c["id"],
+                                                 kind="visit").all()
+    assert len(notes) == 1 and "2026-08-14" in notes[0].title
+    # same day replayed → idempotent, no second event
+    r2 = client.post("/api/connectors/matrix/portal-visits", json={
+        "visits": [{"name": "Sree Pratti", "date": "2026-08-14"}]}).json()
+    assert r2["events_new"] == 0
+
+    spec = importlib.util.spec_from_file_location(
+        "mdw", Path(__file__).parent.parent / "internal" /
+        "matrix-centris-rpa" / "matrix_dashboard_watcher.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    lines = w.section_lines(
+        "My Carts\nRecent Portal Visitors\nSree Pratti\n08/14/2026\n"
+        "Marie-Ève Côté 2026-08-13\nView All (12)\nMy Stats\nignored\n")
+    assert "Sree Pratti" in lines and "My Stats" not in lines
+    visits = w.parse_visits(lines)
+    got = {(v["name"], v["date"]) for v in visits}
+    assert ("Sree Pratti", "2026-08-14") in got
+    assert ("Marie-Ève Côté", "2026-08-13") in got
+    assert not any("View All" in v["name"] for v in visits)
