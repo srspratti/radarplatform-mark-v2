@@ -242,15 +242,44 @@ def click_next(pg) -> bool:
     return False
 
 
+def ensure_summary_view(pg) -> bool:
+    """The link opens in the gallery by default; the details live in the
+    Summary view behind the ⋯ menu (two entries: Portal List / Summary).
+    Open the menu, pick Summary, confirm the « 1 of N » pager appeared."""
+    if RX_PAGER.search(pg.inner_text("body")):
+        return True
+    # menu may already be open — try Summary directly first
+    for attempt in range(2):
+        try:
+            pg.get_by_text(re.compile(r"^\s*Summary\s*$", re.I)).first \
+              .click(timeout=2000)
+            pg.wait_for_load_state("networkidle", timeout=20_000)
+            time.sleep(random.uniform(0.8, 1.4))
+            break
+        except Exception:  # noqa: BLE001
+            if attempt:
+                return False
+            # open the ⋯ view menu, then retry Summary
+            for trigger in ('[aria-label*="more" i]', '[title*="more" i]',
+                            '[aria-label*="view" i]', "text=•••", "text=..."):
+                try:
+                    pg.locator(trigger).first.click(timeout=1500)
+                    time.sleep(0.6)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+    return bool(RX_PAGER.search(pg.inner_text("body")))
+
+
 def harvest_details(pg, max_items: int = 40,
                     photos: bool = False) -> tuple[list[dict], str]:
-    """Iterate the Summary view (« 1 of N ») and parse each property.
-    Returns (items, note). Empty items + note = the view wasn't there."""
-    first = pg.inner_text("body")
-    m = RX_PAGER.search(first)
-    if not m:
-        return [], ("pager « N of M » introuvable — ouvrir le lien une fois "
-                    "et choisir ⋯ → « Portal list and Summary »")
+    """Switch to the Summary view, iterate « 1 of N », parse each property.
+    Returns (items, note). Empty items + note = the view wasn't reachable."""
+    if not ensure_summary_view(pg):
+        return [], ("vue Sommaire inatteignable (menu ⋯ → « Summary ») — "
+                    "ouvrir le lien une fois à la main et choisir Summary, "
+                    "ou me donner le sélecteur du menu ⋯")
+    m = RX_PAGER.search(pg.inner_text("body"))
     total = min(int(m.group(2)), max_items)
     items: list[dict] = []
     for i in range(total):
@@ -326,19 +355,35 @@ def main() -> int:
     ap.add_argument("--photos", action="store_true",
                     help="avec --details : ouvrir « See all pictures » et "
                          "rapatrier jusqu'à 12 photos par inscription")
+    ap.add_argument("--url",
+                    help="tester UN lien de portail directement, sans passer "
+                         "par la file (exige --contact-id pour --apply)")
+    ap.add_argument("--contact-id", type=int, default=0,
+                    help="client visé en mode --url")
     ap.add_argument("--headed", action="store_true",
                     help="fenêtre visible (défaut: headless)")
     args = ap.parse_args()
     api = httpx.Client(base_url=args.hub.rstrip("/") + "/api",
                        headers={"X-Radar-Key": args.key}, timeout=30)
 
-    queue = api.get("/connectors/matrix/link-queue").json()
-    if not queue:
-        print("File vide — aucun lien de portail en attente.")
-        return 0
-    todo = queue[:args.limit]
-    print(f"{len(queue)} lien(s) en file, traitement de {len(todo)} "
-          f"({'APPLY' if args.apply else 'DRY-RUN'})\n")
+    if args.url:
+        if args.apply and not args.contact_id:
+            print("--contact-id requis avec --url --apply "
+                  "(ingest-numbers doit savoir à quel client attribuer).")
+            return 2
+        todo = [{"id": None, "contact_id": args.contact_id,
+                 "client": f"contact {args.contact_id or '?'} (mode --url)",
+                 "url": args.url}]
+        print(f"Mode --url ({'APPLY' if args.apply else 'DRY-RUN'})\n")
+    else:
+        queue = api.get("/connectors/matrix/link-queue").json()
+        if not queue:
+            print("File vide — aucun lien de portail en attente. "
+                  "(Marquer le courriel non-lu → poll, ou tester avec --url.)")
+            return 0
+        todo = queue[:args.limit]
+        print(f"{len(queue)} lien(s) en file, traitement de {len(todo)} "
+              f"({'APPLY' if args.apply else 'DRY-RUN'})\n")
 
     for task in todo:
         print(f"→ [{task['id']}] {task['client']}: {task['url'][:90]}…")
@@ -350,14 +395,14 @@ def main() -> int:
             numbers = extract_numbers(text)
         except Exception as exc:  # noqa: BLE001 — one bad page ≠ dead run
             print(f"  ✗ {exc}")
-            if args.apply:
+            if args.apply and task["id"] is not None:
                 api.post(f"/connectors/matrix/link-queue/{task['id']}",
                          json={"status": "failed", "note": str(exc)[:280]})
             human_pause()
             continue
         if not numbers:
             print("  ∅ aucun numéro Centris sur la page (session expirée?)")
-            if args.apply:
+            if args.apply and task["id"] is not None:
                 api.post(f"/connectors/matrix/link-queue/{task['id']}",
                          json={"status": "failed",
                                "note": "aucun numéro sur la page rendue"})
@@ -399,8 +444,9 @@ def main() -> int:
                 note += f" · {len(rd.get('enriched', []))} enrichies"
                 print(f"    hub: {len(rd.get('enriched', []))} enrichie(s), "
                       f"{len(rd.get('unmatched', []))} sans correspondance")
-            api.post(f"/connectors/matrix/link-queue/{task['id']}",
-                     json={"status": "done", "note": note[:280]})
+            if task["id"] is not None:
+                api.post(f"/connectors/matrix/link-queue/{task['id']}",
+                         json={"status": "done", "note": note[:280]})
             print(f"    hub: +{r.get('listings_new', 0)} inscriptions "
                   f"({r.get('listings_dup', 0)} déjà connues)")
         human_pause()
