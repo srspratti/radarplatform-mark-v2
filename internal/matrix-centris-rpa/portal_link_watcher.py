@@ -341,7 +341,10 @@ def scan_page(url: str, headless: bool, details: bool,
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = _launch(p, headless)
-        page = browser.new_page()
+        # Desktop viewport, deliberately: the portal is responsive and hides
+        # the view menu (⋯) AND the « 1 of N » pager at narrow widths —
+        # Playwright's 1280×720 default put both out of reach.
+        page = browser.new_page(viewport={"width": 1920, "height": 1080})
         page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         if any(k in page.url.lower() for k in ("login", "signin", "logon")):
             browser.close()
@@ -351,6 +354,11 @@ def scan_page(url: str, headless: bool, details: bool,
         prev_len = 0                             # lazy-loaded result rows:
         for _ in range(25):                      # scroll until text stabilizes
             page.mouse.wheel(0, 2400)
+            try:                                 # wheel + hard jump: some
+                page.evaluate(                   # containers only load on a
+                    "window.scrollTo(0, document.body.scrollHeight)")
+            except Exception:  # noqa: BLE001
+                pass
             time.sleep(random.uniform(0.4, 0.9))
             cur = len(page.inner_text("body"))
             if cur == prev_len:
