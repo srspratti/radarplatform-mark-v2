@@ -1,5 +1,6 @@
 """Radar Hub configuration. All secrets via environment — nothing hardcoded."""
 import os
+import secrets
 
 
 class Settings:
@@ -7,6 +8,20 @@ class Settings:
     DB_URL: str = os.getenv("RADAR_DB_URL", "sqlite:///./radar_hub.db")
     API_KEY: str = os.getenv("RADAR_API_KEY", "")  # empty = open (dev mode)
     DEFAULT_TENANT: str = os.getenv("RADAR_TENANT_ID", "danny")
+
+    # Signing secret for self-validating public tokens (qualification/feedback
+    # links). Falls back to API_KEY, then — dev only — to a per-process random
+    # value so tokens are never forgeable with a publicly-known empty secret.
+    TOKEN_SECRET: str = (os.getenv("RADAR_TOKEN_SECRET", "")
+                         or os.getenv("RADAR_API_KEY", "")
+                         or secrets.token_hex(32))
+
+    # CORS: comma-separated list of allowed browser origins. Empty = same-origin
+    # only (the dashboard, portal and /ops are all served by this app, so no
+    # cross-origin access is needed by default). Never wildcard in production.
+    CORS_ORIGINS: list[str] = [
+        o.strip() for o in os.getenv("RADAR_CORS_ORIGINS", "").split(",")
+        if o.strip()]
 
     # Anthropic (optional — everything degrades to deterministic fallbacks)
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

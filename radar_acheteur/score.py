@@ -1,5 +1,5 @@
 """Decay-weighted activity scoring. Transparent, tunable, no ML needed for the pilot."""
-from datetime import datetime, timezone
+from .timeutil import age_days, decay_factor
 
 WEIGHTS = {
     "favorite": 5.0,
@@ -11,25 +11,19 @@ WEIGHTS = {
 REPEAT_VIEW_BONUS = 4.0   # applied when >=3 views of same listing
 
 
-def _age_days(iso: str) -> float:
-    try:
-        dt = datetime.fromisoformat(iso)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-    except Exception:
-        return 0.0
-    return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 86400)
+def signal_weight(sig, half_life_days: float) -> float:
+    """Base weight for a signal type, decayed by the signal's age."""
+    return WEIGHTS.get(sig["type"], 0.0) * decay_factor(
+        age_days(sig["occurred_at"]), half_life_days)
 
 
 def score_contact(signals, half_life_days: float) -> float:
     if not signals:
         return 0.0
-    decay = lambda age: 0.5 ** (age / half_life_days)
     total = 0.0
     view_counts = {}
     for s in signals:
-        w = WEIGHTS.get(s["type"], 0.0)
-        total += w * decay(_age_days(s["occurred_at"]))
+        total += signal_weight(s, half_life_days)
         if s["type"] == "view" and s["listing_no"]:
             view_counts[s["listing_no"]] = view_counts.get(s["listing_no"], 0) + 1
     for listing, n in view_counts.items():
