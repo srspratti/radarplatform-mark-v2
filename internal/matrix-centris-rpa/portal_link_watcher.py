@@ -228,6 +228,9 @@ def grab_photos(pg, cap: int = 12) -> list[str]:
 def click_next(pg) -> bool:
     """The Summary pager's next arrow, by accessibility first."""
     for build in (
+        lambda: pg.locator(
+            "ul.pager a.glyphicon-chevron-right"),          # mtx-pager (live)
+        lambda: pg.locator(".mtx-pager .glyphicon-chevron-right"),
         lambda: pg.locator("[aria-label*='ext']"),          # Next / next
         lambda: pg.get_by_role("button", name=re.compile(r"^(next|›|>)$", re.I)),
         lambda: pg.locator("button:right-of(:text('of'))"),
@@ -251,13 +254,18 @@ def ensure_summary_view(pg, menu_sel: str = "") -> bool:
     if RX_PAGER.search(pg.inner_text("body")):
         return True
     triggers = ([menu_sel] if menu_sel else []) + [
+        "#_ctl0_m_lbViewList",              # « More Views » (DOM relevé live)
+        'a[title="More Views"]',
         '[aria-label*="more" i]', '[title*="more" i]',
         '[aria-label*="view" i]', "text=•••", "text=..."]
     # menu may already be open — try Summary directly first
     for attempt in range(2):
         try:
-            pg.get_by_text(re.compile(r"^\s*Summary\s*$", re.I)).first \
-              .click(timeout=2000)
+            try:
+                pg.get_by_text(re.compile(r"^\s*Summary\s*$", re.I)).first \
+                  .click(timeout=2000)
+            except Exception:  # noqa: BLE001 — anchor fallback
+                pg.locator('a:has-text("Summary")').first.click(timeout=2000)
             pg.wait_for_load_state("networkidle", timeout=20_000)
             time.sleep(random.uniform(0.8, 1.4))
             break
@@ -298,6 +306,10 @@ def harvest_details(pg, max_items: int = 40, photos: bool = False,
         if i < total - 1:
             if not click_next(pg):
                 return items, f"flèche « suivant » introuvable après {i + 1}"
+            try:                       # chaque flèche = postback ASP.NET
+                pg.wait_for_load_state("networkidle", timeout=20_000)
+            except Exception:  # noqa: BLE001
+                pass
             time.sleep(random.uniform(0.8, 1.6))
     return items, ""
 
@@ -336,9 +348,14 @@ def scan_page(url: str, headless: bool, details: bool,
             raise RuntimeError("page demande une connexion — jamais automatisée")
         page.wait_for_load_state("networkidle", timeout=45_000)
         human_pause(1.0, 2.5)
-        for _ in range(8):                       # lazy-loaded result rows
+        prev_len = 0                             # lazy-loaded result rows:
+        for _ in range(25):                      # scroll until text stabilizes
             page.mouse.wheel(0, 2400)
             time.sleep(random.uniform(0.4, 0.9))
+            cur = len(page.inner_text("body"))
+            if cur == prev_len:
+                break
+            prev_len = cur
         text = page.inner_text("body")
         items, note = (harvest_details(page, photos=photos,
                                menu_sel=menu_sel, photo_cap=photo_cap)
