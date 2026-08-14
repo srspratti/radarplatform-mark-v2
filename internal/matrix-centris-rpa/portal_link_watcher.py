@@ -245,42 +245,57 @@ def click_next(pg) -> bool:
     return False
 
 
+def _wait_pager(pg, timeout_s: float = 15) -> bool:
+    """Poll for the « 1 of N » pager. __doPostBack navigations reload the
+    whole page, and wait_for_load_state can return before the navigation
+    even starts — so wait for the CONTENT, tolerating the transient
+    execution-context errors a reload throws."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            if RX_PAGER.search(pg.inner_text("body")):
+                return True
+        except Exception:  # noqa: BLE001 — context destroyed mid-reload
+            pass
+        time.sleep(0.5)
+    return False
+
+
 def ensure_summary_view(pg, menu_sel: str = "") -> bool:
-    """The link opens in the gallery by default; the details live in the
-    Summary view behind the ⋯ menu (two entries: Portal List / Summary).
-    Open the menu, pick Summary, confirm the « 1 of N » pager appeared.
-    menu_sel: exact selector of the ⋯ trigger (DevTools → Copy selector),
-    tried before the accessibility heuristics."""
-    if RX_PAGER.search(pg.inner_text("body")):
+    """The link opens in the gallery; the details live in the Summary view
+    behind the ⋯ « More Views » menu. Open it, click Summary (a __doPostBack
+    full reload), then wait for the « 1 of N » pager to actually appear."""
+    if _wait_pager(pg, 2):
         return True
     triggers = ([menu_sel] if menu_sel else []) + [
         "#_ctl0_m_lbViewList",              # « More Views » (DOM relevé live)
         'a[title="More Views"]',
         '[aria-label*="more" i]', '[title*="more" i]',
         '[aria-label*="view" i]', "text=•••", "text=..."]
-    # menu may already be open — try Summary directly first
-    for attempt in range(2):
+    for trigger in triggers:
+        try:
+            pg.locator(trigger).first.click(timeout=1500)
+            time.sleep(0.8)
+        except Exception:  # noqa: BLE001
+            continue
         try:
             try:
                 pg.get_by_text(re.compile(r"^\s*Summary\s*$", re.I)).first \
-                  .click(timeout=2000)
+                  .click(timeout=2500)
             except Exception:  # noqa: BLE001 — anchor fallback
-                pg.locator('a:has-text("Summary")').first.click(timeout=2000)
-            pg.wait_for_load_state("networkidle", timeout=20_000)
-            time.sleep(random.uniform(0.8, 1.4))
-            break
-        except Exception:  # noqa: BLE001
-            if attempt:
-                return False
-            # open the ⋯ view menu, then retry Summary
-            for trigger in triggers:
-                try:
-                    pg.locator(trigger).first.click(timeout=1500)
-                    time.sleep(0.6)
-                    break
-                except Exception:  # noqa: BLE001
-                    continue
-    return bool(RX_PAGER.search(pg.inner_text("body")))
+                pg.locator('a:has-text("Summary")').first.click(timeout=2500)
+        except Exception:  # noqa: BLE001 — menu did not open; next trigger
+            continue
+        if _wait_pager(pg):
+            return True
+    # last resort: a directly clickable Summary link outside the menu
+    try:
+        pg.locator('a:has-text("Summary")').first.click(timeout=2000)
+        if _wait_pager(pg):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def harvest_details(pg, max_items: int = 40, photos: bool = False,
@@ -306,11 +321,18 @@ def harvest_details(pg, max_items: int = 40, photos: bool = False,
         if i < total - 1:
             if not click_next(pg):
                 return items, f"flèche « suivant » introuvable après {i + 1}"
-            try:                       # chaque flèche = postback ASP.NET
-                pg.wait_for_load_state("networkidle", timeout=20_000)
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(random.uniform(0.8, 1.6))
+            # chaque flèche = postback ASP.NET (rechargement complet) :
+            # attendre que le compteur du pager avance réellement
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                try:
+                    m2 = RX_PAGER.search(pg.inner_text("body"))
+                    if m2 and int(m2.group(1)) >= i + 2:
+                        break
+                except Exception:  # noqa: BLE001 — contexte détruit en vol
+                    pass
+                time.sleep(0.5)
+            time.sleep(random.uniform(0.6, 1.2))
     return items, ""
 
 
@@ -354,8 +376,10 @@ def scan_page(url: str, headless: bool, details: bool,
         prev_len = 0                             # lazy-loaded result rows:
         for _ in range(25):                      # scroll until text stabilizes
             page.mouse.wheel(0, 2400)
-            try:                                 # wheel + hard jump: some
-                page.evaluate(                   # containers only load on a
+            try:
+                page.keyboard.press("End")       # some containers only react
+                page.keyboard.press("PageDown")  # to key scrolling
+                page.evaluate(
                     "window.scrollTo(0, document.body.scrollHeight)")
             except Exception:  # noqa: BLE001
                 pass
