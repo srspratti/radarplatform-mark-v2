@@ -607,7 +607,7 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
         if pics and features.enabled("listing_photos") and not (
                 db.query(ListingPhoto)
                 .filter_by(tenant_id=t, centris_no=no).first()):
-            for i2, b64s in enumerate(pics[:12]):
+            for i2, b64s in enumerate(pics[:40]):
                 try:
                     blob = _b64.b64decode(b64s)
                 except Exception:  # noqa: BLE001

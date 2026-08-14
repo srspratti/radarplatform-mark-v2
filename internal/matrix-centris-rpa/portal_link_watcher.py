@@ -242,12 +242,17 @@ def click_next(pg) -> bool:
     return False
 
 
-def ensure_summary_view(pg) -> bool:
+def ensure_summary_view(pg, menu_sel: str = "") -> bool:
     """The link opens in the gallery by default; the details live in the
     Summary view behind the ⋯ menu (two entries: Portal List / Summary).
-    Open the menu, pick Summary, confirm the « 1 of N » pager appeared."""
+    Open the menu, pick Summary, confirm the « 1 of N » pager appeared.
+    menu_sel: exact selector of the ⋯ trigger (DevTools → Copy selector),
+    tried before the accessibility heuristics."""
     if RX_PAGER.search(pg.inner_text("body")):
         return True
+    triggers = ([menu_sel] if menu_sel else []) + [
+        '[aria-label*="more" i]', '[title*="more" i]',
+        '[aria-label*="view" i]', "text=•••", "text=..."]
     # menu may already be open — try Summary directly first
     for attempt in range(2):
         try:
@@ -260,8 +265,7 @@ def ensure_summary_view(pg) -> bool:
             if attempt:
                 return False
             # open the ⋯ view menu, then retry Summary
-            for trigger in ('[aria-label*="more" i]', '[title*="more" i]',
-                            '[aria-label*="view" i]', "text=•••", "text=..."):
+            for trigger in triggers:
                 try:
                     pg.locator(trigger).first.click(timeout=1500)
                     time.sleep(0.6)
@@ -271,11 +275,12 @@ def ensure_summary_view(pg) -> bool:
     return bool(RX_PAGER.search(pg.inner_text("body")))
 
 
-def harvest_details(pg, max_items: int = 40,
-                    photos: bool = False) -> tuple[list[dict], str]:
+def harvest_details(pg, max_items: int = 40, photos: bool = False,
+                    menu_sel: str = "",
+                    photo_cap: int = 12) -> tuple[list[dict], str]:
     """Switch to the Summary view, iterate « 1 of N », parse each property.
     Returns (items, note). Empty items + note = the view wasn't reachable."""
-    if not ensure_summary_view(pg):
+    if not ensure_summary_view(pg, menu_sel):
         return [], ("vue Sommaire inatteignable (menu ⋯ → « Summary ») — "
                     "ouvrir le lien une fois à la main et choisir Summary, "
                     "ou me donner le sélecteur du menu ⋯")
@@ -286,7 +291,7 @@ def harvest_details(pg, max_items: int = 40,
         item = parse_summary_text(pg.inner_text("body"))
         if item:
             if photos:
-                pics = grab_photos(pg)
+                pics = grab_photos(pg, cap=photo_cap)
                 if pics:
                     item["photos_b64"] = pics
             items.append(item)
@@ -315,7 +320,8 @@ def extract_numbers(text: str) -> list[str]:
 
 
 def scan_page(url: str, headless: bool, details: bool,
-              photos: bool = False) -> tuple[str, list[dict], str]:
+              photos: bool = False, menu_sel: str = "",
+              photo_cap: int = 12) -> tuple[str, list[dict], str]:
     """Open the emailed portal link in Chromium, let it settle, scroll to
     force lazy rows to render, and return (visible text, detail items,
     detail note). No login is ever attempted: a login/signin redirect raises
@@ -334,7 +340,8 @@ def scan_page(url: str, headless: bool, details: bool,
             page.mouse.wheel(0, 2400)
             time.sleep(random.uniform(0.4, 0.9))
         text = page.inner_text("body")
-        items, note = (harvest_details(page, photos=photos)
+        items, note = (harvest_details(page, photos=photos,
+                               menu_sel=menu_sel, photo_cap=photo_cap)
                        if details else ([], ""))
         browser.close()
         return text, items, note
@@ -355,6 +362,13 @@ def main() -> int:
     ap.add_argument("--photos", action="store_true",
                     help="avec --details : ouvrir « See all pictures » et "
                          "rapatrier jusqu'à 12 photos par inscription")
+    ap.add_argument("--menu-sel", default="",
+                    help="sélecteur exact du déclencheur du menu ⋯ "
+                         "(DevTools → Copy selector) si l'heuristique "
+                         "ne le trouve pas")
+    ap.add_argument("--photo-cap", type=int, default=12,
+                    help="photos max par inscription (défaut 12; le hub "
+                         "accepte jusqu'à 40)")
     ap.add_argument("--url",
                     help="tester UN lien de portail directement, sans passer "
                          "par la file (exige --contact-id pour --apply)")
@@ -391,7 +405,9 @@ def main() -> int:
             text, items, dnote = scan_page(task["url"],
                                            headless=not args.headed,
                                            details=args.details,
-                                           photos=args.photos)
+                                           photos=args.photos,
+                                           menu_sel=args.menu_sel,
+                                           photo_cap=args.photo_cap)
             numbers = extract_numbers(text)
         except Exception as exc:  # noqa: BLE001 — one bad page ≠ dead run
             print(f"  ✗ {exc}")
