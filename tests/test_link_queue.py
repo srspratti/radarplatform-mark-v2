@@ -180,3 +180,69 @@ Tel: 5145550199
     # unlabeled page → bare 8-digit fallback, 10-digit phone ignored
     assert watcher.extract_numbers("no labels 20001111 here 5145550199") \
         == ["20001111"]
+
+
+def test_ingest_details_enriches_by_number(client, db):
+    """The watcher's --details sweep: structured facts enrich every client
+    holding the number; empty values never erase; stubs gain address/price."""
+    ids = []
+    for n in (1, 2):
+        lead = client.post("/api/leads", json={
+            "name": f"Détails {n}", "phone": f"514 555 016{n}",
+            "source": "matrix_visit"}).json()
+        c = client.post(f"/api/leads/{lead['id']}/convert").json()
+        ids.append(c["id"])
+        client.post("/api/connectors/matrix/ingest-numbers", json={
+            "contact_id": c["id"], "numbers": ["17004507"]})
+    r = client.post("/api/connectors/matrix/ingest-details", json={
+        "items": [{"centris_no": "17004507",
+                   "address": "143-145 Allée du 15e, Mont-Blanc",
+                   "price": 449900, "beds": 3, "baths": 2,
+                   "fields": {"year": 2010, "living_sqft": 2014,
+                              "taxes_mun": 3311, "style": "Two or more storey",
+                              "hacker_field": "dropped"}},
+                  {"centris_no": "99", "fields": {}}]}).json()
+    assert r["enriched"] == ["17004507"] and r["unmatched"] == ["99"]
+    for cid in ids:
+        row = db.query(Listing).filter_by(contact_id=cid,
+                                          centris_no="17004507").one()
+        assert row.address.startswith("143-145") and row.price == 449900
+        assert row.beds == 3 and row.details["year"] == 2010
+        assert row.details["style"] == "Two or more storey"
+        assert "hacker_field" not in row.details
+    # second pass with sparser data must not erase anything
+    client.post("/api/connectors/matrix/ingest-details", json={
+        "items": [{"centris_no": "17004507", "fields": {"year": 0}}]})
+    row = db.query(Listing).filter_by(contact_id=ids[0],
+                                      centris_no="17004507").one()
+    assert row.details["year"] == 2010 and row.price == 449900
+
+
+def test_watcher_summary_parser():
+    """parse_summary_text against both live template shapes: residential
+    (full facts) and commercial (collapsed empty cells, /sqft rent that must
+    NOT become a sale price)."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "plw", Path(__file__).parent.parent / "internal" /
+        "matrix-centris-rpa" / "portal_link_watcher.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    res = w.parse_summary_text(
+        "3 of 21\n143-145 Allée du 15e, Mont-Blanc\n$449,900\n"
+        "Style\nTwo or more storey\nYear Built\n2010\nLiving Area\n"
+        "2,014 sqft\nMun. Taxes\n$3,311\nBedrooms\n3\nBathrooms\n2\n"
+        "Centris No. 17004507\n")
+    assert res["centris_no"] == "17004507" and res["price"] == 449900
+    assert res["fields"]["year"] == 2010
+    assert res["fields"]["living_sqft"] == 2014
+    assert res["beds"] == 3 and res["baths"] == 2
+    com = w.parse_summary_text(
+        "1 of 21\n85-110 Rue Rolland, Saint-Jérôme\n"
+        "$15.00/sqft/year + GST/QST\nStyle\nUnit\n"
+        "Building Type\nDetached\nBuilding Size\nLot Size\n"
+        "Occupancy\n2026-06-01\n")
+    assert "price" not in com                       # rent ≠ sale price
+    assert com["fields"]["building_type"] == "Detached"
+    assert "building_sqft" not in com["fields"]     # collapsed empty cell

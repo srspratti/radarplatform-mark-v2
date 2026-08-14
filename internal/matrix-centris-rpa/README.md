@@ -71,6 +71,47 @@ python matrix_results_harvester.py --hub http://localhost:8000 \
 # … vérifier, puis --apply
 ```
 
+### Balayage Sommaire — enrichir SANS sélecteurs ni session / no-selector enrichment
+
+🇫🇷 La page du portail (lien du courriel, session anonyme) offre une vue
+**Sommaire** (« 1 of N ») qui contient les détails complets de chaque
+propriété. `portal_link_watcher.py --details` la parcourt : année, taxes,
+superficies, style, type de bâtiment, chambres/SDB, adresse et prix sont
+relevés fiche par fiche et renvoyés à `ingest-details` — **aucun sélecteur à
+remplir, aucune session Matrix, aucun PDF**. Ce qui manque encore après ce
+balayage : les dimensions des pièces (plan 3D) et l'album photos — pour ça,
+l'export PDF détaillé côté Matrix reste le chemin.
+
+🇬🇧 The portal page (the emailed link, anonymous session) has a **Summary**
+view ("1 of N") carrying each property's full details. `portal_link_watcher.py
+--details` walks it: year, taxes, areas, style, building type, beds/baths,
+address and price are lifted per sheet and posted to `ingest-details` — **no
+selectors, no Matrix session, no PDF**. Still missing after this sweep: room
+dimensions (the 3D plan) and the photo album — the broker-side detailed PDF
+export remains the path for those.
+
+```bash
+python portal_link_watcher.py --hub $HUB --key $KEY --details --headed   # dry-run, watch it
+python portal_link_watcher.py --hub $HUB --key $KEY --details --apply
+```
+
+Si le lien s'ouvre dans une autre vue (carte/galerie), le script le signale :
+ouvrez le lien une fois à la main et choisissez ⋯ → « Portal list and
+Summary » — le portail retient la vue. / If the link opens in another view,
+the script says so: open it once by hand and pick ⋯ → "Portal list and
+Summary" — the portal remembers the view.
+
+⚠️ **Harvester et liens de portail** : le flux « tout sélectionner → Imprimer
+PDF » du harvester vit sur la page de résultats **côté Matrix** (votre
+session : Courriels envoyés → ouvrir les résultats), PAS sur la page du
+portail client — utilisez `--results-url` avec cette URL-là. `--from-queue`
+ne convient que si votre chambre affiche l'interface d'impression sur la page
+du portail (la nôtre : non). / The harvester's select-all → Print-PDF flow
+lives on the **Matrix-side** results page (your session: Sent emails → open
+results), NOT on the client portal page — use `--results-url` with that URL.
+`--from-queue` only fits boards whose portal page carries the print UI (ours
+does not).
+
 ### Mode file — l'enrichissement sans intervention / hands-off enrichment
 
 🇫🇷 `--from-queue` enchaîne la **même file de liens de portail** que

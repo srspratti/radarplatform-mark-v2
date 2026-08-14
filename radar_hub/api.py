@@ -548,6 +548,60 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
     return {"parsed_rows": len(cards), **out}
 
 
+class PortalDetailsIn(BaseModel):
+    """Per-property facts read off the client portal's Summary view (the
+    internal watcher's --details sweep). Each item: centris_no + optional
+    address/price/beds/baths + a fields dict of mapped facts."""
+    contact_id: int = 0    # 0 = route each item by Centris no. (all clients)
+    items: list[dict]
+    source: str = "portal_watch"
+
+
+@router.post("/connectors/matrix/ingest-details", dependencies=[Depends(auth)])
+def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    """Enrich existing listings from structured facts (no PDF): same routing
+    contract as the detailed-PDF path — with contact_id it scopes to that
+    client, without it every client holding the Centris number is enriched.
+    Empty values never erase data already present."""
+    import re as _re
+    allowed = {"year", "living_sqft", "lot_sqft", "building_sqft",
+               "taxes_mun", "taxes_school", "style", "building_type",
+               "property_use", "occupancy", "zoning", "remarks"}
+    enriched, unmatched = [], []
+    for item in body.items[:100]:
+        no = _re.sub(r"\D", "", str(item.get("centris_no", "")))
+        if not (7 <= len(no) <= 8):
+            unmatched.append(str(item.get("centris_no", ""))[:20] or "?")
+            continue
+        q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
+        if body.contact_id:
+            q = q.filter_by(contact_id=body.contact_id)
+        rows = q.all()
+        if not rows:
+            unmatched.append(no)
+            continue
+        fields = {k: v for k, v in (item.get("fields") or {}).items()
+                  if k in allowed and v not in (None, "", 0)}
+        for row in rows:
+            det = dict(row.details or {})
+            det.update(fields)
+            det.setdefault("source", body.source[:40])
+            row.details = det
+            if not row.address and item.get("address"):
+                row.address = str(item["address"])[:290]
+            if not row.price and item.get("price"):
+                row.price = int(item["price"])
+            if not row.beds and item.get("beds"):
+                row.beds = int(item["beds"])
+            if not row.baths and item.get("baths"):
+                row.baths = int(item["baths"])
+        db.commit()
+        enriched.append(no)
+    return {"mode": "details", "enriched": enriched, "unmatched": unmatched,
+            "parsed_rows": len(body.items)}
+
+
 @router.get("/connectors/matrix/link-queue", dependencies=[Depends(auth)])
 def matrix_link_queue(status: str = "pending",
                       db: Session = Depends(get_db), t: str = Depends(tenant)):

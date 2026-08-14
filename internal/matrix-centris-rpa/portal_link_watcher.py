@@ -55,6 +55,117 @@ def _launch(pw, headless: bool):
 
 RX_LABELED = re.compile(r"(?:Centris|MLS)[^\d\n]{0,12}(\d{7,8})", re.I)
 RX_BARE = re.compile(r"(?<!\d)(\d{8})(?!\d)")
+RX_PAGER = re.compile(r"(\d+)\s+of\s+(\d+)")
+RX_MONEY = re.compile(r"\$\s*([\d,][\d,.]*)")
+RX_AREA = re.compile(r"([\d,]+(?:\.\d+)?)\s*sq\s?ft", re.I)
+RX_ADDR = re.compile(r"^\d[\w\-]*\s+\S.*,\s*\S")
+
+# Summary-view labels (OneHome/portal, English templates; add French labels
+# here if your board serves the portal in French).
+SUM_FIELDS = {
+    "Year Built": ("year", "int"),
+    "Living Area": ("living_sqft", "area"),
+    "Lot Area": ("lot_sqft", "area"),
+    "Lot Size": ("lot_sqft", "area"),
+    "Building Size": ("building_sqft", "area"),
+    "Mun. Taxes": ("taxes_mun", "money"),
+    "Municipal Taxes": ("taxes_mun", "money"),
+    "School Taxes": ("taxes_school", "money"),
+    "Style": ("style", "str"),
+    "Building Type": ("building_type", "str"),
+    "Property Use": ("property_use", "str"),
+    "Occupancy": ("occupancy", "str"),
+    "Zoning": ("zoning", "str"),
+    "Bedrooms": ("beds", "int"),
+    "Bathrooms": ("baths", "int"),
+}
+# Labels that end a value — a label followed by another label has NO value
+# (the portal collapses empty cells).
+STOP_LABELS = set(SUM_FIELDS) | {
+    "Condominium Type", "Deed of Sale Signature", "Lot Eval.",
+    "Building Eval.", "Cert. of Location", "Type of Business", "Features",
+    "Notes", "Communities", "Occupancy", "Sewage System", "Water Supply",
+    "Foundation", "Annual sales", "Add Note",
+}
+
+
+def _conv(kind: str, raw: str):
+    if kind == "str":
+        return raw.strip()[:120]
+    if kind == "money":
+        m = RX_MONEY.search(raw)
+        return int(m.group(1).replace(",", "").split(".")[0]) if m else None
+    if kind == "area":
+        m = RX_AREA.search(raw)
+        return round(float(m.group(1).replace(",", ""))) if m else None
+    m = re.search(r"\d[\d,]*", raw)
+    return int(m.group(0).replace(",", "")) if m else None
+
+
+def parse_summary_text(text: str) -> dict | None:
+    """One property's Summary view → structured facts. Label/value pairs
+    arrive as consecutive lines; a label followed by another label carries
+    no value. Absent facts stay absent — never guessed."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    fields: dict = {}
+    for i, ln in enumerate(lines[:-1]):
+        if ln in SUM_FIELDS and lines[i + 1] not in STOP_LABELS:
+            key, kind = SUM_FIELDS[ln]
+            v = _conv(kind, lines[i + 1])
+            if v not in (None, ""):
+                fields.setdefault(key, v)
+    item: dict = {"fields": fields}
+    m = RX_LABELED.search(text)
+    if m:
+        item["centris_no"] = m.group(1)
+    for ln in lines[:40]:
+        if "address" not in item and RX_ADDR.match(ln):
+            item["address"] = ln[:290]
+        # a bare sale price line — /sqft rents and eval lines don't qualify
+        if "price" not in item and re.fullmatch(r"\$[\d,]+", ln):
+            item["price"] = int(ln.replace("$", "").replace(",", ""))
+    for src, dst in (("beds", "beds"), ("baths", "baths")):
+        if src in fields:
+            item[dst] = fields.pop(src)
+    return item if (fields or "centris_no" in item) else None
+
+
+def click_next(pg) -> bool:
+    """The Summary pager's next arrow, by accessibility first."""
+    for build in (
+        lambda: pg.locator("[aria-label*='ext']"),          # Next / next
+        lambda: pg.get_by_role("button", name=re.compile(r"^(next|›|>)$", re.I)),
+        lambda: pg.locator("button:right-of(:text('of'))"),
+    ):
+        try:
+            loc = build()
+            if loc.count():
+                loc.first.click(timeout=2500)
+                return True
+        except Exception:  # noqa: BLE001 — heuristic chain
+            continue
+    return False
+
+
+def harvest_details(pg, max_items: int = 40) -> tuple[list[dict], str]:
+    """Iterate the Summary view (« 1 of N ») and parse each property.
+    Returns (items, note). Empty items + note = the view wasn't there."""
+    first = pg.inner_text("body")
+    m = RX_PAGER.search(first)
+    if not m:
+        return [], ("pager « N of M » introuvable — ouvrir le lien une fois "
+                    "et choisir ⋯ → « Portal list and Summary »")
+    total = min(int(m.group(2)), max_items)
+    items: list[dict] = []
+    for i in range(total):
+        item = parse_summary_text(pg.inner_text("body"))
+        if item:
+            items.append(item)
+        if i < total - 1:
+            if not click_next(pg):
+                return items, f"flèche « suivant » introuvable après {i + 1}"
+            time.sleep(random.uniform(0.8, 1.6))
+    return items, ""
 
 
 def human_pause(lo: float = 2.0, hi: float = 6.0) -> None:
@@ -74,10 +185,12 @@ def extract_numbers(text: str) -> list[str]:
     return list(seen)
 
 
-def render_page_text(url: str, headless: bool) -> str:
+def scan_page(url: str, headless: bool,
+              details: bool) -> tuple[str, list[dict], str]:
     """Open the emailed portal link in Chromium, let it settle, scroll to
-    force lazy rows to render, return the visible text. No login is ever
-    attempted: a login/signin redirect raises RuntimeError instead."""
+    force lazy rows to render, and return (visible text, detail items,
+    detail note). No login is ever attempted: a login/signin redirect raises
+    RuntimeError instead."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = _launch(p, headless)
@@ -92,8 +205,9 @@ def render_page_text(url: str, headless: bool) -> str:
             page.mouse.wheel(0, 2400)
             time.sleep(random.uniform(0.4, 0.9))
         text = page.inner_text("body")
+        items, note = harvest_details(page) if details else ([], "")
         browser.close()
-        return text
+        return text, items, note
 
 
 def main() -> int:
@@ -104,6 +218,10 @@ def main() -> int:
                     help="pages max par exécution (défaut 5)")
     ap.add_argument("--apply", action="store_true",
                     help="envoyer au hub + marquer la file (défaut: dry-run)")
+    ap.add_argument("--details", action="store_true",
+                    help="parcourir aussi la vue Sommaire (« 1 of N ») et "
+                         "enrichir chaque fiche — année, taxes, superficies, "
+                         "style — sans PDF ni session Matrix")
     ap.add_argument("--headed", action="store_true",
                     help="fenêtre visible (défaut: headless)")
     args = ap.parse_args()
@@ -121,7 +239,9 @@ def main() -> int:
     for task in todo:
         print(f"→ [{task['id']}] {task['client']}: {task['url'][:90]}…")
         try:
-            text = render_page_text(task["url"], headless=not args.headed)
+            text, items, dnote = scan_page(task["url"],
+                                           headless=not args.headed,
+                                           details=args.details)
             numbers = extract_numbers(text)
         except Exception as exc:  # noqa: BLE001 — one bad page ≠ dead run
             print(f"  ✗ {exc}")
@@ -140,15 +260,42 @@ def main() -> int:
             continue
         print(f"  ✓ {len(numbers)} numéro(s): {', '.join(numbers[:10])}"
               f"{'…' if len(numbers) > 10 else ''}")
+        if args.details:
+            # summary pages sometimes omit the number — pair by position when
+            # the counts line up, and say so
+            if items and len(items) == len(numbers):
+                for i, it in enumerate(items):
+                    if not it.get("centris_no"):
+                        it["centris_no"] = numbers[i]
+                        it["fields"]["no_by_order"] = "1"
+            print(f"  ▤ {len(items)} fiche(s) sommaires"
+                  + (f" — {dnote}" if dnote else ""))
+            for it in items[:4]:
+                facts = ", ".join(f"{k}={v}" for k, v in
+                                  list(it.get("fields", {}).items())[:5])
+                print(f"    · {it.get('centris_no', '????????')} "
+                      f"{(it.get('address') or '')[:34]} "
+                      f"{('$' + format(it['price'], ',')) if it.get('price') else ''} "
+                      f"| {facts}")
+            if len(items) > 4:
+                print(f"    … et {len(items) - 4} autres")
         if args.apply:
             r = api.post("/connectors/matrix/ingest-numbers",
                          json={"contact_id": task["contact_id"],
                                "numbers": numbers,
                                "source": "portal_link_watcher"}).json()
+            note = (f"{r.get('listings_new', 0)} nouvelles, "
+                    f"{r.get('listings_dup', 0)} dédup.")
+            if args.details and items:
+                rd = api.post("/connectors/matrix/ingest-details",
+                              json={"contact_id": task["contact_id"],
+                                    "items": items,
+                                    "source": "portal_watch"}).json()
+                note += f" · {len(rd.get('enriched', []))} enrichies"
+                print(f"    hub: {len(rd.get('enriched', []))} enrichie(s), "
+                      f"{len(rd.get('unmatched', []))} sans correspondance")
             api.post(f"/connectors/matrix/link-queue/{task['id']}",
-                     json={"status": "done",
-                           "note": f"{r.get('listings_new', 0)} nouvelles, "
-                                   f"{r.get('listings_dup', 0)} dédup."})
+                     json={"status": "done", "note": note[:280]})
             print(f"    hub: +{r.get('listings_new', 0)} inscriptions "
                   f"({r.get('listings_dup', 0)} déjà connues)")
         human_pause()
