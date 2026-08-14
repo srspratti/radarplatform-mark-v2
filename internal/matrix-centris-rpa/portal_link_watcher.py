@@ -137,7 +137,8 @@ def parse_summary_text(text: str) -> dict | None:
                 fields.setdefault(key, v)
         # subtitle: "Bungalow built in 1989" → style + year
         if m := RX_BUILT.match(ln):
-            fields.setdefault("style", m.group(1).strip())
+            fields.setdefault("style",
+                              m.group(1).split(" in the ")[0].strip())
             fields.setdefault("year", int(m.group(2)))
         # "No. of Bedrooms (above ground + basement)" → "1+2";
         # "No. of Bathrooms and Powder Rooms" → "2+1"
@@ -186,20 +187,30 @@ def parse_summary_text(text: str) -> dict | None:
 
 
 def grab_photos(pg, cap: int = 12) -> list[str]:
-    """Open « See all pictures (N) », collect the gallery's JPEG URLs,
-    download through the page's own session, close with Escape. Returns
-    base64 strings; empty list on any trouble (photos are a bonus, never a
-    reason to fail the sweep). Small images are skipped (logos, icons)."""
+    """Open « See all pictures (N) » — which opens a NEW TAB on this board —
+    collect the gallery's JPEG URLs from that tab, download through its own
+    session, close it. Falls back to a same-page modal (Escape to close).
+    Photos are a bonus: any trouble returns an empty list, never a failed
+    task. Small images are skipped (logos, icons)."""
     import base64
+    gallery = None
     try:
         link = pg.get_by_text(re.compile(r"See all pictures", re.I)).first
         if link.count():
-            link.click(timeout=2500)
-            time.sleep(random.uniform(1.0, 1.8))
+            try:
+                with pg.expect_popup(timeout=3500) as pop:
+                    link.click(timeout=2500)
+                gallery = pop.value
+                gallery.wait_for_load_state("domcontentloaded", timeout=15_000)
+                time.sleep(random.uniform(1.0, 1.6))
+            except Exception:  # noqa: BLE001 — same-page modal instead
+                gallery = None
+                time.sleep(random.uniform(0.8, 1.2))
     except Exception:  # noqa: BLE001
         pass
+    src_page = gallery or pg
     try:
-        srcs = pg.evaluate("Array.from(document.images).map(i => i.src)")
+        srcs = src_page.evaluate("Array.from(document.images).map(i => i.src)")
     except Exception:  # noqa: BLE001
         srcs = []
     urls = list(dict.fromkeys(
@@ -209,7 +220,7 @@ def grab_photos(pg, cap: int = 12) -> list[str]:
     out: list[str] = []
     for u in urls[:cap * 3]:
         try:
-            r = pg.request.get(u)
+            r = src_page.request.get(u)
             body = r.body()
             if r.status == 200 and len(body) > 9000 and body[:2] == b"\xff\xd8":
                 out.append(base64.b64encode(body).decode())
@@ -217,11 +228,17 @@ def grab_photos(pg, cap: int = 12) -> list[str]:
             continue
         if len(out) >= cap:
             break
-    try:
-        pg.keyboard.press("Escape")
-        time.sleep(0.6)
-    except Exception:  # noqa: BLE001
-        pass
+    if gallery is not None:
+        try:
+            gallery.close()
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        try:
+            pg.keyboard.press("Escape")
+            time.sleep(0.6)
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 
@@ -307,11 +324,15 @@ def harvest_details(pg, max_items: int = 40, photos: bool = False,
         return [], ("vue Sommaire inatteignable (menu ⋯ → « Summary ») — "
                     "ouvrir le lien une fois à la main et choisir Summary, "
                     "ou me donner le sélecteur du menu ⋯")
+    time.sleep(1.2)                    # let the first sheet finish rendering
     m = RX_PAGER.search(pg.inner_text("body"))
     total = min(int(m.group(2)), max_items)
     items: list[dict] = []
     for i in range(total):
         item = parse_summary_text(pg.inner_text("body"))
+        if not item:                   # sheet still rendering? one retry
+            time.sleep(1.2)
+            item = parse_summary_text(pg.inner_text("body"))
         if item:
             if photos:
                 pics = grab_photos(pg, cap=photo_cap)
@@ -458,6 +479,10 @@ def main() -> int:
                                            menu_sel=args.menu_sel,
                                            photo_cap=args.photo_cap)
             numbers = extract_numbers(text)
+            for it in items:       # sheets carry their own numbers — union
+                no = it.get("centris_no")
+                if no and no not in numbers:
+                    numbers.append(no)
         except Exception as exc:  # noqa: BLE001 — one bad page ≠ dead run
             print(f"  ✗ {exc}")
             if args.apply and task["id"] is not None:
