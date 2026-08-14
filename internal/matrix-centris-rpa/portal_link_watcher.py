@@ -59,6 +59,12 @@ RX_PAGER = re.compile(r"(\d+)\s+of\s+(\d+)")
 RX_MONEY = re.compile(r"\$\s*([\d,][\d,.]*)")
 RX_AREA = re.compile(r"([\d,]+(?:\.\d+)?)\s*sq\s?ft", re.I)
 RX_ADDR = re.compile(r"^\d[\w\-]*\s+\S.*,\s*\S")
+# "Bungalow built in 1989" — the subtitle carries style + year
+RX_BUILT = re.compile(r"^([A-Za-z][\w\s\-'’]*?)\s+built in\s+"
+                      r"((?:18|19|20)\d{2})", re.I)
+# room rows: "28.2 X 14.1 ft" (the metric twin says "m" and is skipped)
+RX_DIMS = re.compile(r"^([\d.]+)\s*[Xx]\s*([\d.]+)\s*ft\b")
+RX_PLUS = re.compile(r"^(\d+)\s*\+\s*(\d+)$")           # "1+2" bed counts
 
 # Summary-view labels (OneHome/portal, English templates; add French labels
 # here if your board serves the portal in French).
@@ -78,6 +84,13 @@ SUM_FIELDS = {
     "Zoning": ("zoning", "str"),
     "Bedrooms": ("beds", "int"),
     "Bathrooms": ("baths", "int"),
+    "Heating System": ("heating", "str"),
+    "Water (access)": ("water_access", "str"),
+    "Fireplace-Stove": ("fireplace", "str"),
+    "Parking (total)": ("parking", "str"),
+    "Pool": ("pool", "str"),
+    "Body of Water": ("water_body", "str"),
+    "Property/Unit Amenity": ("amenities", "str"),
 }
 # Labels that end a value — a label followed by another label has NO value
 # (the portal collapses empty cells).
@@ -85,8 +98,15 @@ STOP_LABELS = set(SUM_FIELDS) | {
     "Condominium Type", "Deed of Sale Signature", "Lot Eval.",
     "Building Eval.", "Cert. of Location", "Type of Business", "Features",
     "Notes", "Communities", "Occupancy", "Sewage System", "Water Supply",
-    "Foundation", "Annual sales", "Add Note",
+    "Foundation", "Annual sales", "Add Note", "Expected Delivery Date",
+    "Additional Rev.", "Intergenerational", "Seasonal",
+    "Restrictions/Permissions", "Pets", "Renovations", "Rooms", "Level",
+    "Room", "Imperial", "Metric", "Floor Covering", "Dimens.", "Inclusions",
+    "Exclusions", "Remarks", "Addendum", "Financial Functions",
 }
+# Section headings that terminate the free-text Remarks block
+REMARK_STOPS = {"Addendum", "Financial Functions", "Notes", "Add Note",
+                "Inclusions", "Exclusions"}
 
 
 def _conv(kind: str, raw: str):
@@ -108,12 +128,47 @@ def parse_summary_text(text: str) -> dict | None:
     no value. Absent facts stay absent — never guessed."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     fields: dict = {}
+    rooms: list[dict] = []
     for i, ln in enumerate(lines[:-1]):
         if ln in SUM_FIELDS and lines[i + 1] not in STOP_LABELS:
             key, kind = SUM_FIELDS[ln]
             v = _conv(kind, lines[i + 1])
             if v not in (None, ""):
                 fields.setdefault(key, v)
+        # subtitle: "Bungalow built in 1989" → style + year
+        if m := RX_BUILT.match(ln):
+            fields.setdefault("style", m.group(1).strip())
+            fields.setdefault("year", int(m.group(2)))
+        # "No. of Bedrooms (above ground + basement)" → "1+2";
+        # "No. of Bathrooms and Powder Rooms" → "2+1"
+        if ln.startswith("No. of Bedrooms"):
+            if m := RX_PLUS.match(lines[i + 1]):
+                fields["beds"] = int(m.group(1)) + int(m.group(2))
+            elif lines[i + 1].isdigit():
+                fields["beds"] = int(lines[i + 1])
+        if ln.startswith("No. of Bathrooms"):
+            if m := RX_PLUS.match(lines[i + 1]):
+                fields["baths"], fields["powder"] = (int(m.group(1)),
+                                                     int(m.group(2)))
+            elif lines[i + 1].isdigit():
+                fields["baths"] = int(lines[i + 1])
+        # rooms table: name line, then "28.2 X 14.1 ft" (metric twin skipped)
+        if (m := RX_DIMS.match(ln)) and i and lines[i - 1] not in STOP_LABELS \
+                and not RX_DIMS.match(lines[i - 1]) and len(rooms) < 20:
+            rooms.append({"name": lines[i - 1][:60],
+                          "w_ft": float(m.group(1)),
+                          "d_ft": float(m.group(2))})
+    if rooms:
+        fields["rooms"] = rooms
+    # Remarks: free text between the heading and the next section
+    if "Remarks" in lines:
+        j = lines.index("Remarks") + 1
+        buf: list[str] = []
+        while j < len(lines) and lines[j] not in REMARK_STOPS:
+            buf.append(lines[j])
+            j += 1
+        if buf:
+            fields["remarks"] = " ".join(buf)[:1400]
     item: dict = {"fields": fields}
     m = RX_LABELED.search(text)
     if m:
@@ -128,6 +183,46 @@ def parse_summary_text(text: str) -> dict | None:
         if src in fields:
             item[dst] = fields.pop(src)
     return item if (fields or "centris_no" in item) else None
+
+
+def grab_photos(pg, cap: int = 12) -> list[str]:
+    """Open « See all pictures (N) », collect the gallery's JPEG URLs,
+    download through the page's own session, close with Escape. Returns
+    base64 strings; empty list on any trouble (photos are a bonus, never a
+    reason to fail the sweep). Small images are skipped (logos, icons)."""
+    import base64
+    try:
+        link = pg.get_by_text(re.compile(r"See all pictures", re.I)).first
+        if link.count():
+            link.click(timeout=2500)
+            time.sleep(random.uniform(1.0, 1.8))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        srcs = pg.evaluate("Array.from(document.images).map(i => i.src)")
+    except Exception:  # noqa: BLE001
+        srcs = []
+    urls = list(dict.fromkeys(
+        s for s in srcs
+        if s.startswith("http") and re.search(r"centris|media|mfrmls|photo",
+                                              s, re.I)))
+    out: list[str] = []
+    for u in urls[:cap * 3]:
+        try:
+            r = pg.request.get(u)
+            body = r.body()
+            if r.status == 200 and len(body) > 9000 and body[:2] == b"\xff\xd8":
+                out.append(base64.b64encode(body).decode())
+        except Exception:  # noqa: BLE001
+            continue
+        if len(out) >= cap:
+            break
+    try:
+        pg.keyboard.press("Escape")
+        time.sleep(0.6)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def click_next(pg) -> bool:
@@ -147,7 +242,8 @@ def click_next(pg) -> bool:
     return False
 
 
-def harvest_details(pg, max_items: int = 40) -> tuple[list[dict], str]:
+def harvest_details(pg, max_items: int = 40,
+                    photos: bool = False) -> tuple[list[dict], str]:
     """Iterate the Summary view (« 1 of N ») and parse each property.
     Returns (items, note). Empty items + note = the view wasn't there."""
     first = pg.inner_text("body")
@@ -160,6 +256,10 @@ def harvest_details(pg, max_items: int = 40) -> tuple[list[dict], str]:
     for i in range(total):
         item = parse_summary_text(pg.inner_text("body"))
         if item:
+            if photos:
+                pics = grab_photos(pg)
+                if pics:
+                    item["photos_b64"] = pics
             items.append(item)
         if i < total - 1:
             if not click_next(pg):
@@ -185,8 +285,8 @@ def extract_numbers(text: str) -> list[str]:
     return list(seen)
 
 
-def scan_page(url: str, headless: bool,
-              details: bool) -> tuple[str, list[dict], str]:
+def scan_page(url: str, headless: bool, details: bool,
+              photos: bool = False) -> tuple[str, list[dict], str]:
     """Open the emailed portal link in Chromium, let it settle, scroll to
     force lazy rows to render, and return (visible text, detail items,
     detail note). No login is ever attempted: a login/signin redirect raises
@@ -205,7 +305,8 @@ def scan_page(url: str, headless: bool,
             page.mouse.wheel(0, 2400)
             time.sleep(random.uniform(0.4, 0.9))
         text = page.inner_text("body")
-        items, note = harvest_details(page) if details else ([], "")
+        items, note = (harvest_details(page, photos=photos)
+                       if details else ([], ""))
         browser.close()
         return text, items, note
 
@@ -222,6 +323,9 @@ def main() -> int:
                     help="parcourir aussi la vue Sommaire (« 1 of N ») et "
                          "enrichir chaque fiche — année, taxes, superficies, "
                          "style — sans PDF ni session Matrix")
+    ap.add_argument("--photos", action="store_true",
+                    help="avec --details : ouvrir « See all pictures » et "
+                         "rapatrier jusqu'à 12 photos par inscription")
     ap.add_argument("--headed", action="store_true",
                     help="fenêtre visible (défaut: headless)")
     args = ap.parse_args()
@@ -241,7 +345,8 @@ def main() -> int:
         try:
             text, items, dnote = scan_page(task["url"],
                                            headless=not args.headed,
-                                           details=args.details)
+                                           details=args.details,
+                                           photos=args.photos)
             numbers = extract_numbers(text)
         except Exception as exc:  # noqa: BLE001 — one bad page ≠ dead run
             print(f"  ✗ {exc}")

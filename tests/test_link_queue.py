@@ -246,3 +246,70 @@ def test_watcher_summary_parser():
     assert "price" not in com                       # rent ≠ sale price
     assert com["fields"]["building_type"] == "Detached"
     assert "building_sqft" not in com["fields"]     # collapsed empty cell
+
+
+def test_summary_parser_full_residential_sheet(client, db):
+    """The complete residential Summary sheet (seen live): subtitle carries
+    style+year, bed counts arrive as '1+2', the rooms table feeds the 3D
+    plan, and building/lot dimension lines never become rooms."""
+    import base64
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "plw2", Path(__file__).parent.parent / "internal" /
+        "matrix-centris-rpa" / "portal_link_watcher.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    sheet = (
+        "1 of 21\n367 Rue Lebel, Sainte-Sophie\nBungalow built in 1989\n"
+        "$524,900\nBuilding Type\nDetached\n"
+        "Building Size\n31.2 X 44.3 ft irr / 9.5 X 13.49 m irr\n"
+        "Living Area\nLot Size\n253.5 X 214 ft / 77.25 X 65.24 m\n"
+        "Lot Area\n55,800.09 sqft / 5,184 sqm\n"
+        "Mun. Taxes\n$2,356 (2026)\nSchool Taxes\n$246 (2026)\n"
+        "Rooms\nNo. of Rooms\n12\n"
+        "No. of Bedrooms (above ground + basement)\n1+2\n"
+        "No. of Bathrooms and Powder Rooms\n2+1\n"
+        "Level\nRoom\nImperial\nMetric\nFloor Covering\nDimens.\nDimens.\n"
+        "GF\nLiving room\n28.2 X 14.1 ft\n8.59 X 4.29 m\nWood\n"
+        "GF\nKitchen\n13.10 X 12.11 ft\n4.22 X 3.94 m\nWood\n"
+        "BA1\nBedroom\n12.8 X 10.4 ft\n3.86 X 3.15 m\nLaminate floor\n"
+        "Heating System\nElectric baseboard units\n"
+        "Fireplace-Stove\nWood fireplace\n"
+        "Remarks\nMagnifique propriété bordée par la rivière.\n"
+        "Addendum\nCaractéristiques:\n")
+    item = w.parse_summary_text(sheet)
+    f = item["fields"]
+    assert item["address"].startswith("367 Rue Lebel")
+    assert item["price"] == 524900
+    assert f["style"] == "Bungalow" and f["year"] == 1989
+    assert item["beds"] == 3 and item["baths"] == 2 and f["powder"] == 1
+    assert f["lot_sqft"] == 55800
+    assert f["taxes_mun"] == 2356 and f["taxes_school"] == 246
+    assert f["heating"].startswith("Electric")
+    assert [r["name"] for r in f["rooms"]] == ["Living room", "Kitchen",
+                                               "Bedroom"]
+    assert f["rooms"][0]["w_ft"] == 28.2 and f["rooms"][0]["d_ft"] == 14.1
+    assert f["remarks"].startswith("Magnifique")
+
+    # …and the whole item round-trips through the hub, rooms + photos
+    lead = client.post("/api/leads", json={
+        "name": "Sommaire Complet", "phone": "514 555 0171",
+        "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    client.post("/api/connectors/matrix/ingest-numbers", json={
+        "contact_id": c["id"], "numbers": ["21004507"]})
+    jpeg = base64.b64encode(b"\xff\xd8\xff\xe0FAKEJPEG").decode()
+    item["centris_no"] = "21004507"
+    item["photos_b64"] = [jpeg, base64.b64encode(b"NOTJPEG").decode()]
+    r = client.post("/api/connectors/matrix/ingest-details",
+                    json={"items": [item]}).json()
+    assert r["enriched"] == ["21004507"] and r["photos_added"] == 1
+    from radar_hub.models import ListingPhoto
+    row = db.query(Listing).filter_by(contact_id=c["id"],
+                                      centris_no="21004507").one()
+    assert row.price == 524900 and row.beds == 3
+    assert len(row.details["rooms"]) == 3
+    assert row.details["heating"].startswith("Electric")
+    assert (db.query(ListingPhoto)
+            .filter_by(tenant_id=T, centris_no="21004507").count()) == 1

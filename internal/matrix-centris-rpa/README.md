@@ -78,17 +78,21 @@ python matrix_results_harvester.py --hub http://localhost:8000 \
 propriété. `portal_link_watcher.py --details` la parcourt : année, taxes,
 superficies, style, type de bâtiment, chambres/SDB, adresse et prix sont
 relevés fiche par fiche et renvoyés à `ingest-details` — **aucun sélecteur à
-remplir, aucune session Matrix, aucun PDF**. Ce qui manque encore après ce
-balayage : les dimensions des pièces (plan 3D) et l'album photos — pour ça,
-l'export PDF détaillé côté Matrix reste le chemin.
+remplir, aucune session Matrix, aucun PDF**. Le tableau des pièces (dimensions
+pi/m → plan 3D de la Vitrine), le chauffage, le foyer, les inclusions et les
+remarques complètes sont aussi relevés. Avec `--photos`, le script ouvre
+« See all pictures (N) » et rapatrie jusqu'à 12 photos par inscription —
+l'export PDF détaillé côté Matrix devient un simple plan B.
 
 🇬🇧 The portal page (the emailed link, anonymous session) has a **Summary**
 view ("1 of N") carrying each property's full details. `portal_link_watcher.py
 --details` walks it: year, taxes, areas, style, building type, beds/baths,
 address and price are lifted per sheet and posted to `ingest-details` — **no
-selectors, no Matrix session, no PDF**. Still missing after this sweep: room
-dimensions (the 3D plan) and the photo album — the broker-side detailed PDF
-export remains the path for those.
+selectors, no Matrix session, no PDF**. The rooms table (ft/m dimensions →
+the Vitrine's 3D plan), heating, fireplace, inclusions and full remarks are
+lifted too. With `--photos` the script opens "See all pictures (N)" and pulls
+up to 12 photos per listing — the broker-side detailed PDF export becomes a
+mere fallback.
 
 ```bash
 python portal_link_watcher.py --hub $HUB --key $KEY --details --headed   # dry-run, watch it

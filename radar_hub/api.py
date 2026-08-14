@@ -564,11 +564,15 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
     contract as the detailed-PDF path — with contact_id it scopes to that
     client, without it every client holding the Centris number is enriched.
     Empty values never erase data already present."""
+    import base64 as _b64
     import re as _re
     allowed = {"year", "living_sqft", "lot_sqft", "building_sqft",
                "taxes_mun", "taxes_school", "style", "building_type",
-               "property_use", "occupancy", "zoning", "remarks"}
+               "property_use", "occupancy", "zoning", "remarks", "rooms",
+               "heating", "water_access", "fireplace", "parking", "pool",
+               "water_body", "amenities", "powder"}
     enriched, unmatched = [], []
+    photos_added = 0
     for item in body.items[:100]:
         no = _re.sub(r"\D", "", str(item.get("centris_no", "")))
         if not (7 <= len(no) <= 8):
@@ -582,7 +586,7 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
             unmatched.append(no)
             continue
         fields = {k: v for k, v in (item.get("fields") or {}).items()
-                  if k in allowed and v not in (None, "", 0)}
+                  if k in allowed and v not in (None, "", 0, [])}
         for row in rows:
             det = dict(row.details or {})
             det.update(fields)
@@ -597,9 +601,27 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
             if not row.baths and item.get("baths"):
                 row.baths = int(item["baths"])
         db.commit()
+        # photos are tenant-wide per Centris number — same contract as the
+        # detailed-PDF album (first source wins, capped, feature-gated)
+        pics = item.get("photos_b64") or []
+        if pics and features.enabled("listing_photos") and not (
+                db.query(ListingPhoto)
+                .filter_by(tenant_id=t, centris_no=no).first()):
+            for i2, b64s in enumerate(pics[:12]):
+                try:
+                    blob = _b64.b64decode(b64s)
+                except Exception:  # noqa: BLE001
+                    continue
+                if blob[:2] != b"\xff\xd8":
+                    continue
+                db.add(ListingPhoto(tenant_id=t, centris_no=no,
+                                    mime="image/jpeg", sort=i2,
+                                    content=b64s))
+                photos_added += 1
+            db.commit()
         enriched.append(no)
     return {"mode": "details", "enriched": enriched, "unmatched": unmatched,
-            "parsed_rows": len(body.items)}
+            "photos_added": photos_added, "parsed_rows": len(body.items)}
 
 
 @router.get("/connectors/matrix/link-queue", dependencies=[Depends(auth)])
