@@ -276,8 +276,13 @@ def test_summary_parser_full_residential_sheet(client, db):
         "BA1\nBedroom\n12.8 X 10.4 ft\n3.86 X 3.15 m\nLaminate floor\n"
         "Heating System\nElectric baseboard units\n"
         "Fireplace-Stove\nWood fireplace\n"
+        "Inclusions\nRideaux, aspirateur central, piscine hors-terre\n"
+        "Exclusions\nLave-vaisselle\n"
         "Remarks\nMagnifique propriété bordée par la rivière.\n"
-        "Addendum\nCaractéristiques:\n")
+        "Addendum\nCaractéristiques:\n- Vaste terrain de 55 000 pi².\n"
+        "Source\nRE/MAX CRYSTAL, Real Estate Agency\n"
+        "This is not an offer or promise to sell.\n"
+        "Centris No. : 21846416\nDate Sent : 2026-08-12\n")
     item = w.parse_summary_text(sheet)
     f = item["fields"]
     assert item["address"].startswith("367 Rue Lebel")
@@ -289,6 +294,12 @@ def test_summary_parser_full_residential_sheet(client, db):
     assert f["heating"].startswith("Electric")
     assert [r["name"] for r in f["rooms"]] == ["Living room", "Kitchen",
                                                "Bedroom"]
+    assert f["inclusions"].startswith("Rideaux")
+    assert f["exclusions"] == "Lave-vaisselle"
+    assert f["addendum"].startswith("Caractéristiques")
+    assert f["agency"].startswith("RE/MAX")
+    assert f["date_sent"] == "2026-08-12"
+    assert item["centris_no"] == "21846416"   # footer carries the number
     assert f["rooms"][0]["w_ft"] == 28.2 and f["rooms"][0]["d_ft"] == 14.1
     assert f["remarks"].startswith("Magnifique")
 
@@ -311,5 +322,8 @@ def test_summary_parser_full_residential_sheet(client, db):
     assert row.price == 524900 and row.beds == 3
     assert len(row.details["rooms"]) == 3
     assert row.details["heating"].startswith("Electric")
+    assert row.details["inclusions"].startswith("Rideaux")
+    assert row.details["agency"].startswith("RE/MAX")
+    assert row.details["date_sent"] == "2026-08-12"
     assert (db.query(ListingPhoto)
             .filter_by(tenant_id=T, centris_no="21004507").count()) == 1

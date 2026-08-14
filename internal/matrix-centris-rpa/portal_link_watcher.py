@@ -104,9 +104,13 @@ STOP_LABELS = set(SUM_FIELDS) | {
     "Room", "Imperial", "Metric", "Floor Covering", "Dimens.", "Inclusions",
     "Exclusions", "Remarks", "Addendum", "Financial Functions",
 }
-# Section headings that terminate the free-text Remarks block
-REMARK_STOPS = {"Addendum", "Financial Functions", "Notes", "Add Note",
-                "Inclusions", "Exclusions"}
+# Section headings that terminate a free-text block
+SECTION_STOPS = {"Inclusions", "Exclusions", "Remarks", "Addendum", "Source",
+                 "Financial Functions", "Notes", "Add Note", "Rooms",
+                 "Disclaimer"}
+RX_DATE_SENT = re.compile(r"Date Sent\s*:?\s*(\d{4}-\d{2}-\d{2})")
+RX_COUNTER = re.compile(r"(\d+)\s*/\s*(\d+)")        # photo viewer « 1/44 »
+RX_MEDIA_ID = re.compile(r"[?&]id=([A-Fa-f0-9]+)")
 
 
 def _conv(kind: str, raw: str):
@@ -161,15 +165,26 @@ def parse_summary_text(text: str) -> dict | None:
                           "d_ft": float(m.group(2))})
     if rooms:
         fields["rooms"] = rooms
-    # Remarks: free text between the heading and the next section
-    if "Remarks" in lines:
-        j = lines.index("Remarks") + 1
-        buf: list[str] = []
-        while j < len(lines) and lines[j] not in REMARK_STOPS:
-            buf.append(lines[j])
-            j += 1
-        if buf:
-            fields["remarks"] = " ".join(buf)[:1400]
+    # Free-text sections (each runs until the next section heading)
+    for head, key, cap in (("Remarks", "remarks", 1400),
+                           ("Inclusions", "inclusions", 700),
+                           ("Exclusions", "exclusions", 700),
+                           ("Addendum", "addendum", 2000)):
+        if head in lines:
+            j = lines.index(head) + 1
+            buf: list[str] = []
+            while j < len(lines) and lines[j] not in SECTION_STOPS:
+                buf.append(lines[j])
+                j += 1
+            if buf:
+                fields[key] = " ".join(buf)[:cap]
+    # Sheet footer: listing agency + Date Sent
+    if "Source" in lines:
+        k = lines.index("Source")
+        if k + 1 < len(lines) and lines[k + 1] not in SECTION_STOPS:
+            fields["agency"] = lines[k + 1][:160]
+    if m := RX_DATE_SENT.search(text):
+        fields["date_sent"] = m.group(1)
     item: dict = {"fields": fields}
     m = RX_LABELED.search(text)
     if m:
@@ -186,12 +201,59 @@ def parse_summary_text(text: str) -> dict | None:
     return item if (fields or "centris_no" in item) else None
 
 
+def _viewer_photos(gallery, cap: int) -> list[str]:
+    """Inside the Centris photoViewer tab: read the « 1/44 » counter, then
+    capture the MAIN image and click the next arrow, repeating. Thumbnails
+    lazy-load with empty src, so paging the viewer is the reliable path.
+    Dedupe by media id (?id=…), stop when the counter wraps or cap is hit."""
+    import base64
+    out: list[str] = []
+    seen: set[str] = set()
+    total = cap
+    m = RX_COUNTER.search(gallery.inner_text("body"))
+    if m:
+        total = min(int(m.group(2)), cap)
+    for _ in range(total * 2):          # safety bound
+        try:
+            src = gallery.evaluate(
+                """() => { let best = null, area = 0;
+                     for (const i of document.images) {
+                       const a = (i.naturalWidth||0) * (i.naturalHeight||0);
+                       if (i.src && a > area) { area = a; best = i.src; } }
+                     return best; }""")
+        except Exception:  # noqa: BLE001
+            src = None
+        if src:
+            mid = RX_MEDIA_ID.search(src)
+            key = mid.group(1) if mid else src
+            if key not in seen:
+                seen.add(key)
+                try:
+                    r = gallery.request.get(src)
+                    body = r.body()
+                    if (r.status == 200 and len(body) > 9000
+                            and body[:2] == b"\xff\xd8"):
+                        out.append(base64.b64encode(body).decode())
+                except Exception:  # noqa: BLE001
+                    pass
+        if len(out) >= total:
+            break
+        try:                             # advance: arrow div, else keyboard
+            gallery.locator(".activateNextArrow").first.click(timeout=1200)
+        except Exception:  # noqa: BLE001
+            try:
+                gallery.keyboard.press("ArrowRight")
+            except Exception:  # noqa: BLE001
+                break
+        time.sleep(random.uniform(0.35, 0.6))
+    return out
+
+
 def grab_photos(pg, cap: int = 12) -> list[str]:
-    """Open « See all pictures (N) » — which opens a NEW TAB on this board —
-    collect the gallery's JPEG URLs from that tab, download through its own
-    session, close it. Falls back to a same-page modal (Escape to close).
-    Photos are a bonus: any trouble returns an empty list, never a failed
-    task. Small images are skipped (logos, icons)."""
+    """Open « See all pictures (N) » — a NEW TAB on this board — page through
+    the viewer collecting every photo, close it. Falls back to the images on
+    the summary page itself. Photos are a bonus: any trouble returns an empty
+    list, never a failed task."""
     import base64
     gallery = None
     try:
@@ -208,19 +270,27 @@ def grab_photos(pg, cap: int = 12) -> list[str]:
                 time.sleep(random.uniform(0.8, 1.2))
     except Exception:  # noqa: BLE001
         pass
-    src_page = gallery or pg
+    if gallery is not None:
+        try:
+            out = _viewer_photos(gallery, cap)
+        finally:
+            try:
+                gallery.close()
+            except Exception:  # noqa: BLE001
+                pass
+        return out
+    # fallback: whatever the summary page itself shows
     try:
-        srcs = src_page.evaluate("Array.from(document.images).map(i => i.src)")
+        srcs = pg.evaluate("Array.from(document.images).map(i => i.src)")
     except Exception:  # noqa: BLE001
         srcs = []
     urls = list(dict.fromkeys(
         s for s in srcs
-        if s.startswith("http") and re.search(r"centris|media|mfrmls|photo",
-                                              s, re.I)))
+        if s.startswith("http") and re.search(r"centris|media|photo", s, re.I)))
     out: list[str] = []
     for u in urls[:cap * 3]:
         try:
-            r = src_page.request.get(u)
+            r = pg.request.get(u)
             body = r.body()
             if r.status == 200 and len(body) > 9000 and body[:2] == b"\xff\xd8":
                 out.append(base64.b64encode(body).decode())
@@ -228,17 +298,11 @@ def grab_photos(pg, cap: int = 12) -> list[str]:
             continue
         if len(out) >= cap:
             break
-    if gallery is not None:
-        try:
-            gallery.close()
-        except Exception:  # noqa: BLE001
-            pass
-    else:
-        try:
-            pg.keyboard.press("Escape")
-            time.sleep(0.6)
-        except Exception:  # noqa: BLE001
-            pass
+    try:
+        pg.keyboard.press("Escape")
+        time.sleep(0.6)
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 
@@ -329,6 +393,9 @@ def harvest_details(pg, max_items: int = 40, photos: bool = False,
     total = min(int(m.group(2)), max_items)
     items: list[dict] = []
     for i in range(total):
+        for _ in range(3):             # bottom sections (Remarks, Addendum,
+            pg.keyboard.press("End")   # Source) render below the fold
+            time.sleep(0.35)
         item = parse_summary_text(pg.inner_text("body"))
         if not item:                   # sheet still rendering? one retry
             time.sleep(1.2)
@@ -340,6 +407,8 @@ def harvest_details(pg, max_items: int = 40, photos: bool = False,
                     item["photos_b64"] = pics
             items.append(item)
         if i < total - 1:
+            pg.keyboard.press("Home")  # the pager lives at the top
+            time.sleep(0.4)
             if not click_next(pg):
                 return items, f"flèche « suivant » introuvable après {i + 1}"
             # chaque flèche = postback ASP.NET (rechargement complet) :

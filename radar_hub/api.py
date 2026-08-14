@@ -570,7 +570,8 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
                "taxes_mun", "taxes_school", "style", "building_type",
                "property_use", "occupancy", "zoning", "remarks", "rooms",
                "heating", "water_access", "fireplace", "parking", "pool",
-               "water_body", "amenities", "powder"}
+               "water_body", "amenities", "powder", "inclusions",
+               "exclusions", "addendum", "agency", "date_sent"}
     enriched, unmatched = [], []
     photos_added = 0
     for item in body.items[:100]:
