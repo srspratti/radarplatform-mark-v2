@@ -10,8 +10,34 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { LANG, T, flipLang } from "./i18n.js";
 
-const KEY = new URLSearchParams(window.location.search).get("key") || "";
-const H = KEY ? { "X-Radar-Key": KEY } : {};
+// Same key gate as /ops: the key lives in sessionStorage ("radar_key", shared
+// between both pages so it is entered once), a ?key= URL param seeds it (then
+// is scrubbed from the address bar), and a 401 prompts for it — without this
+// the production page silently fell back to mock data and the portal selector
+// stayed empty.
+const urlKey = new URLSearchParams(window.location.search).get("key") || "";
+if (urlKey) {
+  sessionStorage.setItem("radar_key", urlKey);
+  const u = new URL(window.location);
+  u.searchParams.delete("key");
+  window.history.replaceState({}, "", u);
+}
+let APIKEY = sessionStorage.getItem("radar_key") || "";
+const hdrs = () => (APIKEY ? { "X-Radar-Key": APIKEY } : {});
+async function apiGet(path, retried) {
+  const r = await fetch(path, { headers: hdrs() });
+  if (r.status === 401 && !retried) {
+    const k = window.prompt(T(
+      "Console protégée — entrer la clé API Radar (X-Radar-Key) :",
+      "Protected console — enter the Radar API key (X-Radar-Key):"));
+    if (k) {
+      APIKEY = k.trim();
+      sessionStorage.setItem("radar_key", APIKEY);
+      return apiGet(path, true);
+    }
+  }
+  return r;
+}
 
 const STAGE_IDX = { nouveau: 0, contacte: 0, client_actif: 0, en_reperage: 1,
                     en_visites: 2, offre: 3, transaction: 5, cloture: 7 };
@@ -175,9 +201,11 @@ function TopBar({ clients, hot, edition }) {
 (async () => {
   let rich = [], hot = 0, edition = "";
   try {
-    const [r, s, h] = await Promise.all([
-      fetch("/api/dashboard/clients-rich", { headers: H }),
-      fetch("/api/dashboard/summary", { headers: H }),
+    // clients-rich goes first: if the key is missing it owns the 401 prompt,
+    // and the two sibling calls then reuse the freshly stored key.
+    const r = await apiGet("/api/dashboard/clients-rich");
+    const [s, h] = await Promise.all([
+      apiGet("/api/dashboard/summary"),
       fetch("/api/health"),
     ]);
     if (r.ok) rich = await r.json();
