@@ -28,3 +28,29 @@ def test_sync_runs_only_configured_adapters(client, db, monkeypatch):
     assert r["configured"] == ["fake"]
     assert r["results"]["fake"]["import"]["imported"] == 3
     assert r["results"]["fake"]["writebacks"]["sent"] == 2
+
+
+class _BrokenAdapter:
+    """A CRM whose token was revoked — every call raises like httpx would."""
+    name, label = "broken", "Broken CRM"
+    configured = True
+
+    def import_contacts(self, db, t, limit=100):
+        raise RuntimeError("401 Unauthorized: invalid token")
+
+    def flush(self, db, t):
+        raise RuntimeError("401 Unauthorized: invalid token")
+
+
+def test_sync_degrades_per_adapter_instead_of_500(client, monkeypatch):
+    # One broken CRM must not break the sync endpoint, nor the healthy CRM
+    # running beside it — its failure is reported in-band.
+    monkeypatch.setattr(crm, "ADAPTERS", [_BrokenAdapter(), _FakeAdapter()])
+    resp = client.post("/api/connectors/crm/sync")
+    assert resp.status_code == 200
+    r = resp.json()
+    assert r["configured"] == ["broken", "fake"]
+    assert "401 Unauthorized" in r["results"]["broken"]["import"]["error"]
+    assert "401 Unauthorized" in r["results"]["broken"]["writebacks"]["error"]
+    assert r["results"]["fake"]["import"]["imported"] == 3
+    assert r["results"]["fake"]["writebacks"]["sent"] == 2

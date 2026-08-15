@@ -60,17 +60,35 @@ def status() -> list[dict]:
             for a in ADAPTERS]
 
 
+def _safe(label: str, fn) -> dict:
+    """One adapter phase, degraded to an error report instead of a 500 —
+    a CRM rejecting its token (401, missing scopes, wrong location id) must
+    never take the other CRMs' sync down with it."""
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 — transport/HTTP errors expected
+        db_note = f"{type(exc).__name__}: {exc}"[:200]
+        return {"error": f"{label}: {db_note}"}
+
+
 def sync_all(db: Session, tenant_id: str, limit: int = 100) -> dict:
     """One call = import + writeback flush on every configured CRM.
     This is the endpoint schedulers should hit — it stays correct no matter
-    which CRM(s) a deployment wires up."""
+    which CRM(s) a deployment wires up. Per-adapter failures are reported
+    in-band, never raised."""
     out: dict = {"configured": [], "results": {}}
     for a in ADAPTERS:
         if not a.configured:
             continue
         out["configured"].append(a.name)
-        out["results"][a.name] = {
-            "import": a.import_contacts(db, tenant_id, limit=limit),
-            "writebacks": a.flush(db, tenant_id),
-        }
+        res = {"import": _safe(f"{a.name} import",
+                               lambda a=a: a.import_contacts(
+                                   db, tenant_id, limit=limit))}
+        if "error" in res["import"]:
+            db.rollback()          # a mid-import failure must not poison
+        res["writebacks"] = _safe(f"{a.name} writebacks",
+                                  lambda a=a: a.flush(db, tenant_id))
+        if "error" in res["writebacks"]:
+            db.rollback()
+        out["results"][a.name] = res
     return out
