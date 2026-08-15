@@ -10,4 +10,6 @@ ENV RADAR_EDITION=marketable
 ENV RADAR_DB_URL=sqlite:////data/radar_hub.db
 ENV DB_PATH=/data/radar_acheteur.db
 EXPOSE 8080
-CMD ["sh", "-c", "python -m radar_hub.seed && uvicorn radar_hub.main:app --host 0.0.0.0 --port 8080"]
+# RADAR_SEED_DEMO=1 seeds the demo tenant on boot (idempotent). Default is a
+# CLEAN production instance — no demo clients in front of real ones.
+CMD ["sh", "-c", "if [ \"$RADAR_SEED_DEMO\" = \"1\" ]; then python -m radar_hub.seed; fi && uvicorn radar_hub.main:app --host 0.0.0.0 --port 8080"]

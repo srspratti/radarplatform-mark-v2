@@ -238,11 +238,11 @@ Mise à jour = modifier → `fly deploy`. Domaine :
 `fly certs add app.votredomaine.ca`. Marque blanche **[Vendable]** : nouveau
 nom d'app + volume + secret `RADAR_TENANT_ID` — rien d'autre (décision nº 3).
 
-**Passage en production (sans données démo)** : avant le déploiement final,
-retirez `python -m radar_hub.seed && ` du `CMD` du `Dockerfile` (ou, après un
-premier essai avec démo : `fly ssh console -C "rm /data/radar_hub.db"` puis
-redéployez avec le CMD nettoyé). Importez ensuite les vrais leads via FUB
-(§8).
+**Les données démo sont désormais opt-in** : l'image démarre PROPRE par
+défaut (tables créées, zéro contact). Pour une instance démo :
+`fly secrets set RADAR_SEED_DEMO=1` (seed idempotent à chaque démarrage).
+Semé par erreur ? `fly ssh console -C "rm /data/radar_hub.db"`, retirez le
+secret, redéployez. Importez ensuite les vrais leads via FUB/GHL (§8).
 
 ## 7 · Tâches planifiées
 

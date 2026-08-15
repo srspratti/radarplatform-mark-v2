@@ -243,10 +243,11 @@ Data lives on the volume (`/data/*.db`) and survives deploys. Update = edit →
 **[Marketable]**: new app name + volume + `RADAR_TENANT_ID` secret — nothing
 else changes (decision #3).
 
-**Going to production (no demo data)**: before the final deploy, remove
-`python -m radar_hub.seed && ` from the Dockerfile `CMD` (or, after a first
-demo run: `fly ssh console -C "rm /data/radar_hub.db"` then redeploy with the
-cleaned CMD). Then import real leads via FUB (§8).
+**Demo data is now opt-in**: the image boots CLEAN by default (tables
+created, zero contacts). To run a demo instance, `fly secrets set
+RADAR_SEED_DEMO=1` (idempotent seed on each boot). If you seeded by mistake:
+`fly ssh console -C "rm /data/radar_hub.db"`, unset the secret, redeploy.
+Then import real leads via FUB/GHL (§8).
 
 ## 7 · Scheduled jobs
 
