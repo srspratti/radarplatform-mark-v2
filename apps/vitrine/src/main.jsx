@@ -61,6 +61,9 @@ const MAP = {
 };
 // reaction_pass / theme_change / shop_item / chat_topic / designer_request
 // deliberately stay local — noise or negative signals, not engagement.
+// document_upload / vault_note stay local too, for the opposite reason: the
+// vault endpoints already ingest document.uploaded / message.sent server-side,
+// so mapping them here would score the same act twice.
 
 let ADDR = {};           // centris_no -> address (from live listings fetch)
 const seenSections = new Set();   // throttle section.viewed per session

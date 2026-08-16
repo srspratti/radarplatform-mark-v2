@@ -16,8 +16,8 @@ from .config import settings
 from .models import (ConsentRecord, Contact, ContentItem, Event, Expense,
                      FollowUp, GeoCache, LedgerEntry, Listing, ListingPhoto,
                      MatrixLinkTask, NotificationItem, OutboundMessage,
-                     PortalKV, ProspectCandidate, SellerProspect,
-                     WritebackItem, get_db, utcnow)
+                     PortalDocument, PortalKV, PortalNote, ProspectCandidate,
+                     SellerProspect, WritebackItem, get_db, utcnow)
 from .events import ingest_event, FAMILIES
 from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
@@ -475,6 +475,7 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
         items = matrix_pdf.parse_detailed_pdf(raw)
         created = photos_added = 0
         enriched, unmatched = [], []
+        touched: list[int] = []
         for item in items:
             no = item["centris_no"]
             q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
@@ -490,6 +491,7 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
             if not rows:
                 unmatched.append(no)
                 continue
+            touched.extend(r.contact_id for r in rows)
             for row in rows:
                 det = dict(row.details or {})
                 det.update({k: v for k, v in item.items()
@@ -506,9 +508,17 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
                                             content=_b64.b64encode(blob).decode()))
                         photos_added += 1
                     db.commit()
+        # Enriching an already-announced book sends nothing (those rows carry
+        # an announced_at stamp); a detailed PDF dropped as the FIRST import
+        # for a client is what reaches the announcement sweep here.
+        from .automations import announce_for_contacts
+        ann = announce_for_contacts(
+            db, t, touched, raw_id=f"pdfdet-{body.filename or ''}"
+        ) if touched else {}
         return {"mode": "detailed", "parsed_rows": len(items),
                 "enriched": enriched, "unmatched": unmatched,
-                "listings_new": created, "photos_added": photos_added}
+                "listings_new": created, "photos_added": photos_added,
+                "announced": ann}
     if not c:
         raise HTTPException(422, "PDF de grille : choisir le client "
                                  "(contact_id requis — la grille ne dit pas à "
@@ -533,9 +543,12 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
             if settings.DDF_CLIENT_ID:
                 from .connectors import ddf
                 ddf_result = ddf.sweep(db, t)
+            from .automations import announce_new_listings
+            stamp = body.filename or f"{utcnow():%Y%m%d%H%M%S}"
+            ann = announce_new_listings(db, t, c, raw_id=f"pdfnum-{stamp}")
             return {"mode": "numbers", "parsed_rows": len(numbers),
                     "listings_new": created, "listings_dup": dup,
-                    "ddf": ddf_result,
+                    "ddf": ddf_result, "announced": ann,
                     "note": "identifiants seulement — enrichir via DDF® ou "
                             "un PDF détaillé"}
     if not cards:
@@ -557,6 +570,10 @@ class PortalDetailsIn(BaseModel):
     contact_id: int = 0    # 0 = route each item by Centris no. (all clients)
     items: list[dict]
     source: str = "portal_watch"
+    # True = once the facts are in, tell every client whose listings are
+    # still unannounced (the internal edition's "extract → update portal →
+    # notify" order). Enrichment of an already-announced book sends nothing.
+    announce: bool = True
 
 
 @router.post("/connectors/matrix/ingest-details", dependencies=[Depends(auth)])
@@ -576,6 +593,7 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
                "exclusions", "addendum", "agency", "date_sent"}
     enriched, unmatched = [], []
     photos_added = 0
+    touched: list[int] = []
     for item in body.items[:100]:
         no = _re.sub(r"\D", "", str(item.get("centris_no", "")))
         if not (7 <= len(no) <= 8):
@@ -590,6 +608,7 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
             continue
         fields = {k: v for k, v in (item.get("fields") or {}).items()
                   if k in allowed and v not in (None, "", 0, [])}
+        touched.extend(r.contact_id for r in rows)
         for row in rows:
             det = dict(row.details or {})
             det.update(fields)
@@ -623,8 +642,14 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
                 photos_added += 1
             db.commit()
         enriched.append(no)
+    ann: dict = {}
+    if body.announce and touched:
+        from .automations import announce_for_contacts
+        ann = announce_for_contacts(
+            db, t, touched, raw_id=f"det-{utcnow():%Y%m%d%H%M}")
     return {"mode": "details", "enriched": enriched, "unmatched": unmatched,
-            "photos_added": photos_added, "parsed_rows": len(body.items)}
+            "photos_added": photos_added, "parsed_rows": len(body.items),
+            "announced": ann}
 
 
 @router.get("/connectors/matrix/link-queue", dependencies=[Depends(auth)])
@@ -670,6 +695,10 @@ class NumbersIn(BaseModel):
     contact_id: int
     numbers: list[str]
     source: str = ""      # provenance note, e.g. "portal_link_watcher"
+    # False = create the rows now, tell the client later. The internal
+    # watcher posts identifiers first and facts second: deferring here means
+    # the client gets ONE email, and it carries the addresses and prices.
+    announce: bool = True
 
 
 @router.post("/connectors/matrix/ingest-numbers", dependencies=[Depends(auth)])
@@ -703,8 +732,14 @@ def matrix_ingest_numbers(body: NumbersIn, db: Session = Depends(get_db),
     if settings.DDF_CLIENT_ID:
         from .connectors import ddf
         ddf_result = ddf.sweep(db, t)
+    ann = {"announced": 0, "deferred": True}
+    if body.announce:
+        from .automations import announce_new_listings
+        ann = announce_new_listings(
+            db, t, c, raw_id=f"num-{c.id}-{utcnow():%Y%m%d%H%M}")
     return {"mode": "numbers", "parsed_rows": len(numbers),
             "listings_new": created, "listings_dup": dup, "ddf": ddf_result,
+            "announced": ann,
             "note": "identifiants seulement — enrichir via DDF® ou un PDF "
                     "détaillé"}
 
@@ -1580,6 +1615,244 @@ def vitrine_listings(token: str, db: Session = Depends(get_db)):
              # 3D plan, remarks, inclusions, agency, date_sent…
              "details": r.details or {},
              "received_at": r.received_at.isoformat()} for r in rows]
+
+
+# --------------------------------------------- client vault: docs & notes --
+# Two-way, so both sides read and write the same shelf: the client uploads
+# their pre-approval from the portal, the broker answers in the ops console,
+# and the exchange never leaves the measured surface (no email attachments,
+# no lost thread). Portal side is token-gated, broker side is key-gated.
+DOC_MIMES = {
+    "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "png": "image/png", "heic": "image/heic", "webp": "image/webp",
+    "doc": "application/msword", "txt": "text/plain", "csv": "text/csv",
+    "docx": ("application/vnd.openxmlformats-officedocument"
+             ".wordprocessingml.document"),
+    "xls": "application/vnd.ms-excel",
+    "xlsx": ("application/vnd.openxmlformats-officedocument"
+             ".spreadsheetml.sheet"),
+}
+DOC_MAX_B64 = 11_000_000        # ~8 MB decoded
+DOC_MAX_PER_CLIENT = 60
+
+
+def _doc_out(d: PortalDocument) -> dict:
+    """Metadata only — the bytes travel through the download endpoint."""
+    return {"id": d.id, "name": d.name, "mime": d.mime,
+            "size_bytes": d.size_bytes, "uploaded_by": d.uploaded_by,
+            "note": d.note, "created_at": d.created_at.isoformat()}
+
+
+def _store_document(db: Session, t: str, c: Contact, name: str,
+                    content_b64: str, uploaded_by: str, note: str = "") -> dict:
+    import base64 as _b64
+    name = (name or "document").strip()[:200]
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in DOC_MIMES:
+        raise HTTPException(422, "type de fichier non accepté "
+                                 f"({', '.join(sorted(DOC_MIMES))})")
+    if len(content_b64) > DOC_MAX_B64:
+        raise HTTPException(422, "fichier trop lourd (max ~8 Mo)")
+    try:
+        size = len(_b64.b64decode(content_b64, validate=True))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(422, "contenu base64 invalide")
+    if not size:
+        raise HTTPException(422, "fichier vide")
+    n = (db.query(PortalDocument)
+         .filter_by(tenant_id=t, contact_id=c.id).count())
+    if n >= DOC_MAX_PER_CLIENT:
+        raise HTTPException(422, f"maximum {DOC_MAX_PER_CLIENT} documents par "
+                                 "client — supprimer avant d'ajouter")
+    d = PortalDocument(tenant_id=t, contact_id=c.id, name=name,
+                       mime=DOC_MIMES[ext], size_bytes=size,
+                       content=content_b64, uploaded_by=uploaded_by,
+                       note=(note or "")[:300])
+    db.add(d)
+    db.commit()
+    if uploaded_by == "client":
+        # A client sending a document is a real engagement signal; a broker
+        # filing one is housekeeping (actor=realtor scores nothing).
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="document.uploaded",
+                     actor="client", origin="vitrine",
+                     payload={"name": d.name, "size": size},
+                     idempotency_key=f"doc-{d.id}")
+        from .automations import notify
+        notify(db, t, "document", f"{c.name} a déposé « {d.name} » au portail",
+               contact_id=c.id)
+    else:
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="document.uploaded",
+                     actor="realtor", origin="hub",
+                     payload={"name": d.name, "size": size},
+                     idempotency_key=f"doc-{d.id}", reproject=False)
+    return _doc_out(d)
+
+
+def _document_download(db: Session, t: str, contact_id: int, doc_id: int
+                       ) -> Response:
+    import base64 as _b64
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != t or d.contact_id != contact_id:
+        raise HTTPException(404, "document introuvable")
+    safe = d.name.replace('"', "").replace("\\", "")
+    return Response(content=_b64.b64decode(d.content), media_type=d.mime,
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{safe}"',
+                             "Cache-Control": "private, max-age=300"})
+
+
+def _post_note(db: Session, t: str, c: Contact, body: str, author: str) -> dict:
+    body = (body or "").strip()[:4000]
+    if not body:
+        raise HTTPException(422, "note vide")
+    n = PortalNote(tenant_id=t, contact_id=c.id, author=author, body=body)
+    db.add(n)
+    db.commit()
+    if author == "client":
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="message.sent",
+                     actor="client", origin="vitrine",
+                     payload={"kind": "portal_note"},
+                     idempotency_key=f"pnote-{n.id}")
+        from .automations import notify
+        notify(db, t, "message", f"Note de {c.name} au portail",
+               body=body[:200], contact_id=c.id)
+    return {"id": n.id, "author": n.author, "body": n.body, "read": n.read,
+            "created_at": n.created_at.isoformat()}
+
+
+class DocIn(BaseModel):
+    name: str
+    content_b64: str
+    note: str = ""
+
+
+class NoteIn(BaseModel):
+    body: str
+
+
+@router.get("/vitrine/vault/{token}")
+def vault_get(token: str, db: Session = Depends(get_db)):
+    """Everything on the client's shelf: documents (metadata) + the note
+    thread. One call so the portal tab opens in a single round trip."""
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        return {"enabled": False, "documents": [], "notes": []}
+    docs = (db.query(PortalDocument)
+            .filter_by(tenant_id=c.tenant_id, contact_id=c.id)
+            .order_by(PortalDocument.created_at.desc()).limit(60).all())
+    notes = (db.query(PortalNote)
+             .filter_by(tenant_id=c.tenant_id, contact_id=c.id)
+             .order_by(PortalNote.created_at.asc()).limit(200).all())
+    # The client is reading: the broker's notes are now seen.
+    for n in notes:
+        if n.author == "broker" and not n.read:
+            n.read = True
+    db.commit()
+    return {"enabled": True,
+            "documents": [_doc_out(d) for d in docs],
+            "notes": [{"id": n.id, "author": n.author, "body": n.body,
+                       "created_at": n.created_at.isoformat()} for n in notes]}
+
+
+@router.post("/vitrine/vault/{token}/documents")
+def vault_upload(token: str, body: DocIn, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        raise HTTPException(403, "coffre à documents désactivé")
+    return _store_document(db, c.tenant_id, c, body.name, body.content_b64,
+                           "client", body.note)
+
+
+@router.get("/vitrine/vault/{token}/documents/{doc_id}")
+def vault_download(token: str, doc_id: int, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    return _document_download(db, c.tenant_id, c.id, doc_id)
+
+
+@router.delete("/vitrine/vault/{token}/documents/{doc_id}")
+def vault_delete(token: str, doc_id: int, db: Session = Depends(get_db)):
+    """A client may withdraw what they uploaded — never what the broker
+    filed (that is the broker's record of the file)."""
+    c = _contact_by_token(db, token)
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != c.tenant_id or d.contact_id != c.id:
+        raise HTTPException(404, "document introuvable")
+    if d.uploaded_by != "client":
+        raise HTTPException(403, "document déposé par le courtier")
+    db.delete(d)
+    db.commit()
+    return {"id": doc_id, "deleted": True}
+
+
+@router.post("/vitrine/vault/{token}/notes")
+def vault_note(token: str, body: NoteIn, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        raise HTTPException(403, "coffre à documents désactivé")
+    return _post_note(db, c.tenant_id, c, body.body, "client")
+
+
+@router.get("/clients/{contact_id}/vault", dependencies=[Depends(auth)])
+def broker_vault(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    docs = (db.query(PortalDocument).filter_by(tenant_id=t, contact_id=c.id)
+            .order_by(PortalDocument.created_at.desc()).limit(60).all())
+    notes = (db.query(PortalNote).filter_by(tenant_id=t, contact_id=c.id)
+             .order_by(PortalNote.created_at.asc()).limit(200).all())
+    unread = sum(1 for n in notes if n.author == "client" and not n.read)
+    for n in notes:
+        if n.author == "client" and not n.read:
+            n.read = True
+    db.commit()
+    return {"contact_id": c.id, "unread_before": unread,
+            "documents": [_doc_out(d) for d in docs],
+            "notes": [{"id": n.id, "author": n.author, "body": n.body,
+                       "created_at": n.created_at.isoformat()} for n in notes]}
+
+
+@router.post("/clients/{contact_id}/vault/documents",
+             dependencies=[Depends(auth)])
+def broker_vault_upload(contact_id: int, body: DocIn,
+                        db: Session = Depends(get_db),
+                        t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return _store_document(db, t, c, body.name, body.content_b64, "broker",
+                           body.note)
+
+
+@router.get("/clients/{contact_id}/vault/documents/{doc_id}",
+            dependencies=[Depends(auth)])
+def broker_vault_download(contact_id: int, doc_id: int,
+                          db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    return _document_download(db, t, contact_id, doc_id)
+
+
+@router.delete("/clients/{contact_id}/vault/documents/{doc_id}",
+               dependencies=[Depends(auth)])
+def broker_vault_delete(contact_id: int, doc_id: int,
+                        db: Session = Depends(get_db),
+                        t: str = Depends(tenant)):
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != t or d.contact_id != contact_id:
+        raise HTTPException(404, "document introuvable")
+    db.delete(d)
+    db.commit()
+    return {"id": doc_id, "deleted": True}
+
+
+@router.post("/clients/{contact_id}/vault/notes", dependencies=[Depends(auth)])
+def broker_vault_note(contact_id: int, body: NoteIn,
+                      db: Session = Depends(get_db), t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return _post_note(db, t, c, body.body, "broker")
 
 
 class PortalVisitsIn(BaseModel):

@@ -416,6 +416,87 @@ function CriteriaField({f, val, set}) {
   </select>;
 }
 
+// Broker side of the client's portal shelf: read what they uploaded, answer
+// their notes, file documents back — so a promise to purchase or a
+// pre-approval never has to travel as an email attachment.
+function VaultPanel({cid, toast}) {
+  const [d,setD]=useState(null); const [draft,setDraft]=useState("");
+  const [busy,setBusy]=useState("");
+  const load=useCallback(async()=>{ try{ setD(await api(`/clients/${cid}/vault`)); }catch(e){} },[cid]);
+  useEffect(()=>{ load(); },[load]);
+  const send=async()=>{
+    const body=draft.trim(); if(!body) return; setBusy("note");
+    try{ await api(`/clients/${cid}/vault/notes`,{method:"POST",body:JSON.stringify({body})});
+      setDraft(""); await load(); toast(T("Note envoyée au portail du client","Note sent to the client's portal")); }
+    catch(e){ toast(e.message,true); }
+    setBusy("");
+  };
+  const upload=async(f)=>{
+    if(!f) return; setBusy("up");
+    try{
+      const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+        rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+      await api(`/clients/${cid}/vault/documents`,{method:"POST",
+        body:JSON.stringify({name:f.name, content_b64:b64})});
+      await load(); toast(T("Document déposé dans le portail","Document filed in the portal")); }
+    catch(e){ toast(e.message,true); }
+    setBusy("");
+  };
+  const del=async(id)=>{ try{ await api(`/clients/${cid}/vault/documents/${id}`,{method:"DELETE"}); await load(); }catch(e){ toast(e.message,true); } };
+  if(!d) return null;
+  // Fetched as a blob, not window.open: the key travels in the X-Radar-Key
+  // header — never as a query string that would land in access logs.
+  const dl=async(id,name)=>{
+    try{
+      const r=await fetch(`/api/clients/${cid}/vault/documents/${id}`,
+        {headers:{"X-Tenant-Id":TENANT, ...(APIKEY?{"X-Radar-Key":APIKEY}:{})}});
+      if(!r.ok) throw new Error(T("Téléchargement impossible","Download failed"));
+      const url=URL.createObjectURL(await r.blob());
+      const a=document.createElement("a"); a.href=url; a.download=name||"document";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+    }catch(e){ toast(e.message,true); }
+  };
+  return <div className="panel p-3 mt-3">
+    <div className="mono text-[10px] amber mb-2">{T("▮ DOSSIER CLIENT — documents & notes du portail","▮ CLIENT FILE — portal documents & notes")}</div>
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <div className="mono text-[10px] text-[var(--mute)] mb-1">{T("Documents","Documents")} ({d.documents.length})</div>
+        {d.documents.length===0 && <div className="text-xs text-[var(--mute)]">{T("Aucun document.","No documents.")}</div>}
+        {d.documents.map(x=>(
+          <div key={x.id} className="flex items-center gap-2 mono text-[10px] py-1 border-b border-[var(--line)]/30 last:border-0">
+            <span>{x.uploaded_by==="client"?"⬆":"⬇"}</span>
+            <button onClick={()=>dl(x.id,x.name)} className="truncate text-left hover:text-[var(--amber)] flex-1" title={x.name}>{x.name}</button>
+            <span className="text-[var(--mute)] shrink-0">{x.created_at.slice(0,10)}</span>
+            <button onClick={()=>del(x.id)} className="text-[var(--mute)] hover:text-red-300 shrink-0">✕</button>
+          </div>))}
+        <label className="mono text-[10px] px-2 py-1 mt-2 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer inline-block">
+          {busy==="up"?T("Envoi…","Uploading…"):T("＋ Déposer un document","＋ File a document")}
+          <input type="file" className="hidden" onChange={e=>{ upload(e.target.files&&e.target.files[0]); e.target.value=""; }}/>
+        </label>
+      </div>
+      <div>
+        <div className="mono text-[10px] text-[var(--mute)] mb-1">{T("Notes","Notes")}
+          {d.unread_before>0 && <span className="ml-1 amber">· {d.unread_before} {T("non lue(s)","unread")}</span>}</div>
+        <div className="space-y-1 max-h-40 overflow-auto mb-2">
+          {d.notes.length===0 && <div className="text-xs text-[var(--mute)]">{T("Aucun échange.","No messages.")}</div>}
+          {d.notes.map(n=>(
+            <div key={n.id} className={"text-[11px] p-1.5 rounded "+(n.author==="client"?"bg-emerald-400/10":"bg-black/20")}>
+              <div className="mono text-[9px] text-[var(--mute)]">{n.author==="client"?T("client","client"):T("vous","you")} · {n.created_at.replace("T"," ").slice(0,16)}</div>
+              <div className="whitespace-pre-wrap">{n.body}</div>
+            </div>))}
+        </div>
+        <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={2}
+          placeholder={T("Répondre au client…","Reply to the client…")}
+          className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]"/>
+        <button onClick={send} disabled={!draft.trim()||busy==="note"}
+          className="mono text-[10px] px-3 py-1.5 mt-1 rounded bg-[var(--amber)]/90 text-black font-semibold disabled:opacity-40">
+          {busy==="note"?T("Envoi…","Sending…"):T("Envoyer","Send")}</button>
+      </div>
+    </div>
+  </div>;
+}
+
 function CriteriaPanel({cid, toast}) {
   const [d,setD]=useState(null); const [schema,setSchema]=useState(null);
   const [form,setForm]=useState(null); const [busy,setBusy]=useState(false);
@@ -727,11 +808,21 @@ function ContactsView({toast, on, feats}) {
                 rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
               try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
                   body:JSON.stringify({contact_id:sel.id, content_b64:b64, filename:f.name})});
-                toast(r.mode==="detailed"
+                // Le client est prévenu par le hub (courriel à SON adresse +
+                // texto) — le dire ici, sinon le courtier ne sait pas si
+                // l'avis est parti.
+                const ann=r.announced && (r.announced.announced!==undefined
+                  ? r.announced
+                  : Object.values(r.announced)[0]);
+                const tail = ann && ann.announced
+                  ? T(` · avis client : ${ann.announced} inscription(s) — courriel ${ann.email}, texto ${ann.sms}`,
+                      ` · client notified: ${ann.announced} listing(s) — email ${ann.email}, SMS ${ann.sms}`)
+                  : "";
+                toast((r.mode==="detailed"
                   ? T(`${r.parsed_rows} fiche(s) enrichie(s) — année, pièces, taxes, description · ${r.photos_added} photo(s) importée(s)`,
                       `${r.parsed_rows} sheet(s) enriched — year, rooms, taxes, description · ${r.photos_added} photo(s) imported`)
                   : T(`${r.parsed_rows} ligne(s) lues — ${r.listings_new} nouvelle(s) inscription(s), ${r.listings_dup} déjà connue(s)`,
-                      `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`)); }
+                      `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`))+tail); }
               catch(err){ toast(err.message,true); }
               e.target.value="";
             }}/>
@@ -742,6 +833,7 @@ function ContactsView({toast, on, feats}) {
           </div>
         </div>
         {sel.lifecycle==="client" && <CriteriaPanel cid={sel.id} toast={toast}/>}
+        {sel.lifecycle==="client" && on && on("client_documents") && <VaultPanel cid={sel.id} toast={toast}/>}
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}
         <div className="panel p-3 mt-3">
           <div className="mono text-[10px] amber mb-2">{T("▮ CHRONOLOGIE UNIFIÉE — Vitrine + Matrix + FUB + Hub","▮ UNIFIED TIMELINE — Vitrine + Matrix + FUB + Hub")}</div>

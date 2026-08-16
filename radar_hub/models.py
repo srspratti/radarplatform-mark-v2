@@ -87,6 +87,12 @@ class Listing(Base):
     # taxes, room dimensions, remarks — everything the alert grid lacks.
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Stamped when the client was told about this row (alert email / SMS).
+    # NULL = never announced — the announcement sweep's work list, so a row
+    # can be created now and announced later (internal edition ingests
+    # identifiers first, facts second, and announces once facts are in).
+    announced_at: Mapped[datetime | None] = mapped_column(DateTime,
+                                                          nullable=True)
     __table_args__ = (UniqueConstraint("tenant_id", "contact_id", "centris_no",
                                        name="uq_listing_per_client"),)
 
@@ -307,6 +313,40 @@ class MatrixLinkTask(Base):
     done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class PortalDocument(Base):
+    """The client's document vault — one shelf per client, both directions.
+    The client uploads their pre-approval, the broker drops the promise to
+    purchase, and neither has to email an attachment: the portal IS the
+    channel, so the exchange stays inside the measured surface.
+    Base64 in SQLite, same MVP storage contract as ListingPhoto."""
+    __tablename__ = "portal_documents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    mime: Mapped[str] = mapped_column(String(80), default="application/pdf")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    content: Mapped[str] = mapped_column(Text)              # base64
+    uploaded_by: Mapped[str] = mapped_column(String(10), default="client")  # client|broker
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow,
+                                                 index=True)
+
+
+class PortalNote(Base):
+    """Broker ⇄ client thread inside the portal. Client-authored notes are
+    real engagement (actor=client); broker replies are not scored."""
+    __tablename__ = "portal_notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    contact_id: Mapped[int] = mapped_column(Integer, index=True)
+    author: Mapped[str] = mapped_column(String(10), default="client")  # client|broker
+    body: Mapped[str] = mapped_column(Text, default="")
+    read: Mapped[bool] = mapped_column(Boolean, default=False)  # by the other side
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow,
+                                                 index=True)
+
+
 class ConsentRecord(Base):
     """Loi 25 / LCAP audit trail — one row per consent fact, never updated,
     only appended (revocations are new rows with granted=False)."""
@@ -350,6 +390,13 @@ def _migrate_contacts() -> None:
     lcols = {c["name"] for c in inspect(engine).get_columns("listings")}
     if "details" not in lcols:
         added.append("ALTER TABLE listings ADD COLUMN details JSON")
+    if "announced_at" not in lcols:
+        # Pre-existing rows count as already announced: the client saw them
+        # through the old path, and a backfill must never re-alert months of
+        # inventory in one burst.
+        added.append("ALTER TABLE listings ADD COLUMN announced_at DATETIME")
+        added.append("UPDATE listings SET announced_at = received_at "
+                     "WHERE announced_at IS NULL")
     with engine.begin() as conn:
         for stmt in added:
             conn.execute(text(stmt))

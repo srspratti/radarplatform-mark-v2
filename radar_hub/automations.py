@@ -169,6 +169,86 @@ def check_priority_threshold(db: Session, t: str, c: Contact) -> bool:
     return True
 
 
+def send_listing_alert_sms(db: Session, t: str, c: Contact, n: int,
+                           raw_id: str = "") -> str:
+    """« 3 nouvelles inscriptions — voir mon portail » + the portal link.
+    The text carries no listing facts: its whole job is to pull the client
+    into the Vitrine, where the browsing is measurable. CASL-gated exactly
+    like the AI texts, and idempotent per announcement batch."""
+    if not features.enabled("alert_sms") or n <= 0:
+        return "skipped"
+    if not c.phone or not c.portal_token:
+        return "skipped"
+    if not has_consent(db, t, c):
+        return "no_consent"
+    from .events import ingest_event
+    _, created = ingest_event(
+        db, tenant_id=t, contact_id=c.id, etype="outreach.sent",
+        actor="system", origin="hub",
+        payload={"kind": "listing_alert_sms", "n": n},
+        idempotency_key=f"alertsms-{c.id}-{raw_id}", reproject=False)
+    if not created:
+        return "duplicate"
+    url = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/portail/{c.portal_token}"
+    fr = (c.language or "fr") == "fr"
+    body = features.setting(
+        "listing_sms_fr" if fr else "listing_sms_en",
+        ("Bonjour {name}, {n} nouvelle(s) inscription(s) vous attendent dans "
+         "votre portail : {url}") if fr else
+        ("Hi {name}, {n} new listing(s) are waiting in your portal: {url}")
+    ).format(name=(c.name.split()[0] if c.name else ""), n=n, url=url)
+    m = queue_msg(db, t, c, "sms", body, "listing_alert_sms")
+    return m.status
+
+
+def announce_new_listings(db: Session, t: str, c: Contact,
+                          raw_id: str = "") -> dict:
+    """Tell the client about every listing of theirs not yet announced —
+    email (tracked links) + SMS — then stamp the rows so no later ingest
+    re-announces them.
+
+    One entry point for all three paths that create listings: the parsed
+    alert email, the realtor's PDF drop (marketable), and the internal
+    watcher's identifiers/details posts. Because the work list is
+    `announced_at IS NULL` rather than "what this call just created", an
+    edition that ingests identifiers first and facts second can defer the
+    announcement (announce=False on the first call) and the client still
+    receives ONE email — carrying the facts, once they exist."""
+    from .models import Listing
+    rows = (db.query(Listing)
+            .filter(Listing.tenant_id == t, Listing.contact_id == c.id,
+                    Listing.announced_at.is_(None))
+            .order_by(Listing.received_at.asc()).limit(40).all())
+    if not rows:
+        return {"announced": 0, "email": "skipped", "sms": "skipped"}
+    cards = [{"centris_no": r.centris_no, "address": r.address,
+              "price": r.price, "beds": r.beds, "baths": r.baths,
+              "prop_type": r.prop_type} for r in rows]
+    salt = raw_id or f"{rows[0].id}-{rows[-1].id}-{len(rows)}"
+    email = send_listing_alert_email(db, t, c, cards, salt)
+    sms = send_listing_alert_sms(db, t, c, len(cards), salt)
+    # Stamped even when both channels are off/unconfigured: "announced" means
+    # the hub has processed this batch, so turning a channel on later starts
+    # from today's listings instead of replaying the archive.
+    stamp = utcnow()
+    for r in rows:
+        r.announced_at = stamp
+    db.commit()
+    return {"announced": len(rows), "email": email, "sms": sms}
+
+
+def announce_for_contacts(db: Session, t: str, contact_ids, raw_id: str = ""
+                          ) -> dict:
+    """announce_new_listings over a set of clients (the details/enrichment
+    ingest routes by Centris number, so it touches several books at once)."""
+    out: dict[str, dict] = {}
+    for cid in dict.fromkeys(contact_ids):
+        c = db.get(Contact, cid)
+        if c and c.tenant_id == t and c.lifecycle == "client":
+            out[str(cid)] = announce_new_listings(db, t, c, raw_id)
+    return out
+
+
 def send_listing_alert_email(db: Session, t: str, c: Contact,
                              cards: list[dict], raw_id: str = "") -> str:
     """Mirror a Centris alert as OUR tracked-link email (alert_mailer).

@@ -308,17 +308,13 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
                               "address": card["address"], "match": True},
                      reproject=False,
                      idempotency_key=f"mx-listing-{contact.id}-{card['centris_no']}")
-    alert_status = "skipped"
+    alert_status, sms_status = "skipped", "skipped"
+    ann: dict = {"announced": 0}
     if new_cards:
-        # Mirror the alert as OUR tracked-link email — Centris' own email links
-        # can't be instrumented (we don't control their HTML); this is the
-        # click-capture mechanism (alert_mailer).
-        from ..automations import send_listing_alert_email
-        alert_status = send_listing_alert_email(db, tenant_id, contact,
-                                                new_cards, raw_id)
-        # Licensed DDF® feed configured → enrich the new rows immediately
-        # (facts + photos by MLS number). Best-effort: the alert pipeline
-        # must never fail because the feed hiccuped.
+        # Licensed DDF® feed configured → enrich the new rows BEFORE telling
+        # the client (facts + photos by MLS number), so the alert carries the
+        # real address and price instead of a bare identifier. Best-effort:
+        # the alert pipeline must never fail because the feed hiccuped.
         if settings.DDF_CLIENT_ID:
             from . import ddf
             from ..models import Listing
@@ -332,8 +328,15 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
                         ddf.enrich_listing(db, tenant_id, row, client)
                     except Exception:  # noqa: BLE001
                         pass
+        # Mirror the alert as OUR tracked-link email — Centris' own email links
+        # can't be instrumented (we don't control their HTML); this is the
+        # click-capture mechanism (alert_mailer) — plus the SMS nudge.
+        from ..automations import announce_new_listings
+        ann = announce_new_listings(db, tenant_id, contact, raw_id)
+        alert_status, sms_status = ann["email"], ann["sms"]
     return {"listings_new": new, "listings_dup": dup,
-            "alert_email": alert_status}
+            "alert_email": alert_status, "alert_sms": sms_status,
+            "announced": ann}
 
 
 _RX_PORTAL_URL = re.compile(

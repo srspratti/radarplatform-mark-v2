@@ -150,10 +150,54 @@ select **All** → **Print/Email PDF** with a detailed grid format (e.g.
   attachment automatically when the body has no cards, or
 - **drop it in `/ops`** (client drawer → "Import PDF Matrix"), or
 - `POST /api/connectors/matrix/ingest-pdf` (`contact_id` + `content_b64`).
-Rows are deduped per client and mirrored by `alert_mailer` exactly like
-email-parsed cards. Four human clicks in Matrix, zero automation of Centris.
-(`RADAR_EDITION=internal` additionally unlocks the fenced RPA scaffold in
-`internal/` — broker's own account, personal testing only, dry-run default.)
+Rows are deduped per client and announced to the client exactly like
+email-parsed cards (§5.2.1). Four human clicks in Matrix, zero automation of
+Centris. (`RADAR_EDITION=internal` additionally unlocks the fenced RPA
+scaffold in `internal/` — broker's own account, personal testing only,
+dry-run default.)
+
+#### 5.2.1 Telling the client — email + SMS, both editions
+Whenever listings land for a client, the hub notifies them **at their real
+email address and phone number** (never the internal intake address):
+
+| | |
+|---|---|
+| **Email** (`alert_mailer`) | The hub's own mirror of the alert, every link tracked: click → `email.link_clicked` → the portal opens on that listing. Centris' own email links can't be instrumented, so this mirror IS the measurement. Needs `SMTP_*` (§5.6). |
+| **SMS** (`alert_sms`) | Short text — "3 new listings are waiting in your portal: <link>". No property facts, just the pull back into the Vitrine. Needs Twilio or GHL LC Phone, and a CASL consent record when `consent_vault` is on. Templates: `listing_sms_fr` / `listing_sms_en` in `features.toml`. |
+
+The point of both is the same: browsing happens **inside the Vitrine**, where
+it is measured, instead of inside a Centris email where it is invisible. That
+is what keeps the engagement score honest.
+
+Each listing row carries an `announced_at` stamp, so a client is told **once**
+per listing no matter how many times an ingest runs:
+- **Marketable** — the realtor drops the results PDF → rows created → client
+  notified in the same request. The `/ops` toast reports the email and SMS
+  status.
+- **Internal** — the watcher posts identifiers with `announce=false`, then the
+  Summary-view facts with `announce=true`: the client receives **one** email,
+  and it carries real addresses and prices instead of bare Centris numbers.
+  `portal_link_watcher.py --details --apply` does this ordering for you and
+  prints `avis client: N inscription(s) — courriel … · texto …`.
+
+To suppress notification on an ingest (backfills, corrections), post with
+`"announce": false` — the rows stay unannounced until something announces
+them. Listings that predate this feature were stamped as already-announced by
+the migration, so upgrading never re-alerts your archive.
+
+#### 5.2.2 Client file — documents & notes (`client_documents`)
+The portal carries the document exchange, so a pre-approval or a promise to
+purchase never travels as an email attachment:
+- Client side: portal tab **« Mon dossier » / "My file"** — upload documents
+  (PDF, images, Word, Excel; 8 MB each, 60 per client), withdraw their own
+  uploads, and write notes to the broker.
+- Broker side: `/ops` → client drawer → **« Dossier client »** — read and
+  download what the client sent, file documents back, answer the thread.
+- A client upload raises `document.uploaded` and a portal note raises
+  `message.sent` (both `actor=client`), so the exchange feeds the engagement
+  score; broker actions are recorded but never scored.
+- Endpoints: `GET/POST/DELETE /api/vitrine/vault/{token}[/documents|/notes]`
+  (token-gated) and `/api/clients/{id}/vault[…]` (key-gated).
 
 ### 5.3 Vitrine webhook secret
 Set `VITRINE_WEBHOOK_SECRET` on the server. The bundled portal is same-origin
@@ -211,8 +255,9 @@ playwright install chromium
    empty auto-email's portal link (`GET /api/connectors/matrix/link-queue`);
    `portal_link_watcher.py` opens each link (anonymous session, no login
    ever automated), lifts the Centris numbers from the rendered page and
-   posts them back — enrichment then comes from DDF®/detailed PDFs. Dry-run
-   by default; see the folder README.
+   posts them back — enrichment then comes from DDF®/detailed PDFs, or from
+   `--details` (Summary view). The client is notified last, once the facts
+   are in place (§5.2.1). Dry-run by default; see the folder README.
 
 ## 6 · Deploying (Fly.io, YUL)
 

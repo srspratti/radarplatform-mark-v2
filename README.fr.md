@@ -49,6 +49,17 @@ ensemble. Un seul processus sert tout.
 6. **Voir comme le client** — sélecteur « 👁 Ouvrir le portail d'un
    client… » dans la barre du tableau de bord ; bouton « 👁 Portail client »
    dans `/ops` ; le seed imprime chaque URL de portail et adresse d'alerte.
+7. **Le client est averti, et il revient dans le portail** — les nouvelles
+   inscriptions déclenchent un courriel traqué (`alert_mailer`) et un texto
+   court (`alert_sms`) vers sa propre adresse et son propre numéro, tous deux
+   pointant vers la Vitrine. Chaque inscription n'est annoncée qu'une fois
+   (`announced_at`) ; l'édition interne diffère l'annonce jusqu'à ce que les
+   faits soient là, pour qu'un seul courriel porte les vraies adresses.
+8. **Dossier client** — documents et notes circulent dans les deux sens à
+   l'intérieur du portail (`client_documents`) : le client dépose sa
+   préqualification, le courtier dépose la promesse d'achat et répond dans le
+   même fil. Aucune pièce jointe par courriel, et l'échange nourrit le score
+   d'engagement.
 
 ## Démarrage rapide
 

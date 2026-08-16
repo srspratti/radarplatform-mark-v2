@@ -52,6 +52,19 @@ appreciation_rate = 0.028
 alert_mail_subject_fr = "{n} nouvelles inscriptions dans votre portail"
 alert_mail_subject_en = "{n} new listings in your portal"
 
+# --- Avis texto de nouvelles inscriptions / new-listing SMS (alert_sms) -------
+# FR · Le même événement déclenche un texto court vers le téléphone RÉEL du
+#      client : aucun détail de propriété, seulement le lien du portail — le
+#      client revient dans la Vitrine, donc son magasinage reste mesurable.
+#      Consentement LCAP requis (même porte que les textos IA).
+# EN · The same event fires a short text to the client's REAL phone: no
+#      property facts, just the portal link — the client comes back into the
+#      Vitrine, so their browsing stays measurable. CASL consent required
+#      (same gate as the AI texts).
+# {name} = prénom / first name · {n} = inscriptions / listings · {url} = portail
+listing_sms_fr = "Bonjour {name}, {n} nouvelle(s) inscription(s) vous attendent dans votre portail : {url}"
+listing_sms_en = "Hi {name}, {n} new listing(s) are waiting in your portal: {url}"
+
 # --- Textos IA de seuil / threshold-driven AI texts (ai_texts) ----------------
 # FR · Client Centris : quand le score d'engagement atteint le seuil, l'IA envoie
 #      le texto prédéfini ({name} = prénom), au plus une fois par période de repos.

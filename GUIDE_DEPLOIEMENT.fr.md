@@ -144,6 +144,51 @@ Vitrine en notes de personne. Planifiez les deux (§7).
 5. Cycle de lecture : `POST /api/connectors/matrix/poll` (à planifier, §7),
    ou testez n'importe quel courriel avec `scripts/ingest_email.sh`.
 
+#### 5.2.1 Avertir le client — courriel + texto, les deux éditions
+Dès que des inscriptions entrent pour un client, le hub l'avertit **à sa vraie
+adresse courriel et à son vrai numéro** (jamais l'adresse d'admission interne) :
+
+| | |
+|---|---|
+| **Courriel** (`alert_mailer`) | Le miroir de l'alerte produit par le hub, tous liens mesurés : clic → `email.link_clicked` → le portail s'ouvre sur cette inscription. Les liens des courriels Centris ne peuvent pas être instrumentés : ce miroir EST la mesure. Requiert `SMTP_*` (§5.6). |
+| **Texto** (`alert_sms`) | Message court — « 3 nouvelles inscriptions vous attendent dans votre portail : <lien> ». Aucun détail de propriété, seulement le retour vers la Vitrine. Requiert Twilio ou LC Phone (GHL), et un consentement LCAP consigné si `consent_vault` est actif. Gabarits : `listing_sms_fr` / `listing_sms_en` dans `features.toml`. |
+
+Le but des deux est le même : le magasinage se fait **dans la Vitrine**, où il
+est mesuré, plutôt que dans un courriel Centris où il est invisible. C'est ce
+qui garde le score d'engagement honnête.
+
+Chaque inscription porte un jalon `announced_at` : le client est averti **une
+seule fois** par inscription, peu importe le nombre d'ingestions :
+- **Vendable** — le courtier dépose le PDF des résultats → les fiches sont
+  créées → le client est averti dans la même requête. Le toast `/ops` indique
+  l'état du courriel et du texto.
+- **Interne** — le veilleur publie d'abord les numéros avec `announce=false`,
+  puis les faits de la vue Sommaire avec `announce=true` : le client reçoit
+  **un** courriel, et il porte les vraies adresses et les prix plutôt que des
+  numéros nus. `portal_link_watcher.py --details --apply` respecte cet ordre
+  et affiche `avis client: N inscription(s) — courriel … · texto …`.
+
+Pour ingérer sans avertir (reprises, corrections), publiez avec
+`"announce": false` — les fiches restent non annoncées jusqu'à ce qu'une
+annonce les couvre. Les inscriptions antérieures à cette fonction ont été
+marquées comme déjà annoncées par la migration : la mise à jour ne réalerte
+jamais l'archive.
+
+#### 5.2.2 Dossier client — documents & notes (`client_documents`)
+Le portail porte l'échange de documents : une préqualification ou une promesse
+d'achat ne voyage plus en pièce jointe.
+- Côté client : onglet **« Mon dossier »** — déposer des documents (PDF,
+  images, Word, Excel ; 8 Mo chacun, 60 par client), retirer ses propres
+  dépôts, écrire des notes au courtier.
+- Côté courtier : `/ops` → fiche client → **« Dossier client »** — lire et
+  télécharger ce que le client a envoyé, déposer des documents en retour,
+  répondre au fil.
+- Un dépôt client émet `document.uploaded` et une note émet `message.sent`
+  (tous deux `actor=client`) : l'échange nourrit le score d'engagement ; les
+  gestes du courtier sont consignés mais jamais pointés.
+- Points d'accès : `GET/POST/DELETE /api/vitrine/vault/{token}[/documents|/notes]`
+  (par jeton) et `/api/clients/{id}/vault[…]` (par clé API).
+
 ### 5.3 Secret du webhook Vitrine
 Définissez `VITRINE_WEBHOOK_SECRET` côté serveur. Le portail livré est de
 même origine, donc rien d'autre à configurer ; si un jour le portail est
@@ -206,8 +251,9 @@ playwright install chromium
    (`GET /api/connectors/matrix/link-queue`) ;
    `portal_link_watcher.py` ouvre chaque lien (session anonyme, connexion
    jamais automatisée), relève les numéros Centris de la page rendue et les
-   renvoie au hub — l'enrichissement vient ensuite du DDF®/PDF détaillés.
-   Dry-run par défaut ; voir le README du dossier.
+   renvoie au hub — l'enrichissement vient ensuite du DDF®/PDF détaillés, ou
+   de `--details` (vue Sommaire). Le client est averti à la fin, une fois les
+   faits en place (§5.2.1). Dry-run par défaut ; voir le README du dossier.
 
 ## 6 · Déploiement (Fly.io, YUL)
 

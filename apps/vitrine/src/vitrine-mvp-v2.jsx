@@ -1977,6 +1977,185 @@ function WhoChip({ lang }) {
   );
 }
 
+/* ================================================================== */
+/*  Dossier — documents + notes, two-way with the broker                */
+/*  [radar-platform] The portal replaces the email attachment: what the  */
+/*  client sends and what the broker files live on one shelf, and the    */
+/*  thread beside it keeps the question attached to the document.        */
+/*  Demo mode (no token) shows the shelf empty with an explanatory line  */
+/*  — never invented documents.                                         */
+/* ================================================================== */
+const VAULT_ACCEPT = ".pdf,.jpg,.jpeg,.png,.heic,.webp,.doc,.docx,.xls,.xlsx,.txt,.csv";
+const VAULT_MAX_BYTES = 8 * 1024 * 1024;
+
+function fmtBytes(n) {
+  if (!n) return "";
+  if (n < 1024) return `${n} o`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} ko`;
+  return `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+function VaultView({ lang, log }) {
+  const t = (fr, en) => (lang === "fr" ? fr : en);
+  const tok = (typeof window !== "undefined" && window.__VITRINE_TOKEN__) || "";
+  const [docs, setDocs] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const fileRef = useRef(null);
+
+  async function load() {
+    if (!tok) { setLoaded(true); return; }
+    try {
+      const r = await fetch(`/api/vitrine/vault/${tok}`);
+      if (r.ok) { const d = await r.json(); setDocs(d.documents || []); setNotes(d.notes || []); }
+    } catch {}
+    setLoaded(true);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function upload(file) {
+    if (!file || !tok) return;
+    if (file.size > VAULT_MAX_BYTES) { setErr(t("Fichier trop lourd (max 8 Mo).", "File too large (max 8 MB).")); return; }
+    setErr(""); setBusy("up");
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).split(",")[1] || "");
+        fr.onerror = rej;
+        fr.readAsDataURL(file);
+      });
+      const r = await fetch(`/api/vitrine/vault/${tok}/documents`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, content_b64: b64 }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setErr(d.detail || t("Envoi impossible.", "Upload failed."));
+      } else {
+        log("document_upload", { name: file.name });
+        await load();
+      }
+    } catch { setErr(t("Envoi impossible.", "Upload failed.")); }
+    setBusy("");
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function removeDoc(id) {
+    if (!tok) return;
+    setBusy(`del${id}`);
+    try { await fetch(`/api/vitrine/vault/${tok}/documents/${id}`, { method: "DELETE" }); await load(); } catch {}
+    setBusy("");
+  }
+
+  async function sendNote() {
+    const body = draft.trim();
+    if (!body || !tok) return;
+    setBusy("note");
+    try {
+      const r = await fetch(`/api/vitrine/vault/${tok}/notes`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      if (r.ok) { setDraft(""); log("vault_note", { chars: body.length }); await load(); }
+    } catch {}
+    setBusy("");
+  }
+
+  if (!loaded) return null;
+  return (
+    <div className="max-w-2xl mx-auto px-3 sm:px-4 pt-5 pb-16">
+      <Eyebrow>{t("Documents & échanges", "Documents & messages")}</Eyebrow>
+      <h1 style={{ fontFamily: F.disp, fontWeight: 800, fontSize: 26, color: C.ink, margin: "4px 0 4px" }}>{t("Mon dossier", "My file")}</h1>
+      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 14 }}>
+        {t(`Déposez vos documents ici plutôt que par courriel — ${BROKER.name} les voit immédiatement, et tout reste au même endroit.`,
+           `Drop your documents here instead of emailing them — ${BROKER.name} sees them immediately, and everything stays in one place.`)}
+      </div>
+
+      {!tok && (
+        <div className="rounded-2xl p-4 mb-3" style={{ background: C.ochreSoft, border: `1px solid ${C.line}`, fontSize: 12.5, color: C.ink }}>
+          {t("Aperçu de démonstration — le dépôt de documents s'active dans votre portail personnel.",
+             "Demo preview — document upload is active in your own portal.")}
+        </div>
+      )}
+
+      <section className="rounded-2xl p-4 mb-3" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+        <SectionHead icon={FileText} title={t("Documents", "Documents")} note={docs.length ? `${docs.length}` : t("aucun", "none")} />
+        {docs.length === 0 && (
+          <div style={{ fontSize: 12.5, color: C.sub, padding: "6px 0 10px" }}>
+            {t("Preuve de préqualification, relevés, pièce d'identité, promesse d'achat…",
+               "Pre-approval letter, statements, ID, promise to purchase…")}
+          </div>
+        )}
+        {docs.map((d) => (
+          <div key={d.id} className="flex items-center gap-2 py-2" style={{ borderBottom: `1px solid ${C.line}` }}>
+            <FileText size={15} style={{ color: d.uploaded_by === "broker" ? C.metro : C.spruce, flexShrink: 0 }} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <a href={tok ? `/api/vitrine/vault/${tok}/documents/${d.id}` : "#"}
+                 style={{ fontSize: 13, fontWeight: 700, color: C.ink, textDecoration: "none", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {d.name}
+              </a>
+              <div style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub }}>
+                {d.uploaded_by === "broker" ? t(`de ${BROKER.name}`, `from ${BROKER.name}`) : t("déposé par vous", "uploaded by you")}
+                {d.size_bytes ? ` · ${fmtBytes(d.size_bytes)}` : ""} · {String(d.created_at).slice(0, 10)}
+              </div>
+            </div>
+            {d.uploaded_by === "client" && (
+              <button onClick={() => removeDoc(d.id)} disabled={busy === `del${d.id}`}
+                style={{ background: "transparent", border: 0, color: C.sub, padding: 4 }} aria-label={t("Retirer", "Remove")}>
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        ))}
+        <input ref={fileRef} type="file" accept={VAULT_ACCEPT} style={{ display: "none" }}
+               onChange={(e) => upload(e.target.files && e.target.files[0])} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={!tok || busy === "up"}
+          className="rounded-xl px-3 py-2 mt-3 w-full"
+          style={{ background: tok ? C.ink : C.line, color: "#fff", border: 0, fontWeight: 700, fontSize: 13 }}>
+          {busy === "up" ? t("Envoi…", "Uploading…") : t("＋ Ajouter un document", "＋ Add a document")}
+        </button>
+        {err && <div style={{ fontSize: 12, color: C.danger, marginTop: 8 }}>{err}</div>}
+        <div style={{ fontSize: 11, color: C.sub, marginTop: 8 }}>
+          {t("PDF, images, Word, Excel — 8 Mo maximum par fichier.", "PDF, images, Word, Excel — 8 MB max per file.")}
+        </div>
+      </section>
+
+      <section className="rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+        <SectionHead icon={MessageSquare} title={t("Notes et questions", "Notes and questions")} note={t(`avec ${BROKER.name}`, `with ${BROKER.name}`)} />
+        <div className="space-y-2 mb-3">
+          {notes.length === 0 && (
+            <div style={{ fontSize: 12.5, color: C.sub }}>
+              {t("Écrivez ici ce que vous voulez lui transmettre — elle répond au même endroit.",
+                 "Write whatever you want to pass along — she answers in the same place.")}
+            </div>
+          )}
+          {notes.map((n) => (
+            <div key={n.id} className="rounded-xl px-3 py-2" style={{
+              background: n.author === "client" ? C.metroSoft : C.snow,
+              border: `1px solid ${C.line}`, marginLeft: n.author === "client" ? 24 : 0, marginRight: n.author === "client" ? 0 : 24 }}>
+              <div style={{ fontFamily: F.mono, fontSize: 10.5, color: C.sub, marginBottom: 2 }}>
+                {n.author === "client" ? t("Vous", "You") : BROKER.name} · {String(n.created_at).slice(0, 16).replace("T", " ")}
+              </div>
+              <div style={{ fontSize: 13, color: C.ink, whiteSpace: "pre-wrap" }}>{n.body}</div>
+            </div>
+          ))}
+        </div>
+        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3}
+          placeholder={t("Votre message…", "Your message…")} disabled={!tok}
+          style={{ width: "100%", borderRadius: 12, border: `1px solid ${C.line}`, padding: "10px 12px", fontSize: 13, fontFamily: F.body, resize: "vertical" }} />
+        <button onClick={sendNote} disabled={!tok || !draft.trim() || busy === "note"}
+          className="rounded-xl px-3 py-2 mt-2 inline-flex items-center gap-1.5"
+          style={{ background: draft.trim() && tok ? C.metro : C.line, color: "#fff", border: 0, fontWeight: 700, fontSize: 13 }}>
+          <Send size={13} /> {busy === "note" ? t("Envoi…", "Sending…") : t("Envoyer", "Send")}
+        </button>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [lang, setLang] = useState("fr");
   const [view, setView] = useState("listings");
@@ -2064,7 +2243,9 @@ function App() {
     );
   }
 
-  const views = [["listings", List, t("Inscriptions", "Listings")], ["alerts", Bell, t("Alertes", "Alerts")], ["broker", User, t("Votre courtière", "Your broker")]];
+  const views = [["listings", List, t("Inscriptions", "Listings")], ["alerts", Bell, t("Alertes", "Alerts")],
+    ...(featOn("client_documents") ? [["vault", FileText, t("Dossier", "My file")]] : []),
+    ["broker", User, t("Votre courtière", "Your broker")]];
 
   return (
     <div style={{ background: C.snow, minHeight: "100vh", fontFamily: F.body, color: C.ink }}>
@@ -2107,6 +2288,7 @@ function App() {
             onCompare={() => setView("compare")} onBack={() => setView("listings")} />
         )}
         {view === "alerts" && <PrefsView lang={lang} log={log} />}
+        {view === "vault" && <VaultView lang={lang} log={log} />}
         {view === "broker" && <RealtorProfile lang={lang} />}
         {view === "compare" && <CompareView lang={lang} onEvent={log} />}
       </main>

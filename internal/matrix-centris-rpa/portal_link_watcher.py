@@ -430,6 +430,15 @@ def human_pause(lo: float = 2.0, hi: float = 6.0) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+def _print_announcement(ann: dict) -> None:
+    """Ce que le hub a envoyé au client (courriel à SON adresse + texto)."""
+    for res in (ann or {}).values():
+        if not isinstance(res, dict) or not res.get("announced"):
+            continue
+        print(f"    avis client: {res['announced']} inscription(s) — "
+              f"courriel {res.get('email')} · texto {res.get('sms')}")
+
+
 def extract_numbers(text: str) -> list[str]:
     """Labeled « Centris No. : NNNNNNNN » occurrences first; bare 8-digit
     tokens only as a fallback when nothing is labeled (same policy as the
@@ -589,20 +598,31 @@ def main() -> int:
             if len(items) > 4:
                 print(f"    … et {len(items) - 4} autres")
         if args.apply:
+            # Ordre voulu : extraire → alimenter le portail → PUIS avertir.
+            # Quand on relève aussi les détails, l'annonce est différée
+            # (announce=false) pour que le courriel/texto du client parte une
+            # seule fois, avec l'adresse et le prix — pas un numéro nu.
+            defer = bool(args.details and items)
             r = api.post("/connectors/matrix/ingest-numbers",
                          json={"contact_id": task["contact_id"],
                                "numbers": numbers,
-                               "source": "portal_link_watcher"}).json()
+                               "source": "portal_link_watcher",
+                               "announce": not defer}).json()
             note = (f"{r.get('listings_new', 0)} nouvelles, "
                     f"{r.get('listings_dup', 0)} dédup.")
-            if args.details and items:
+            if defer:
                 rd = api.post("/connectors/matrix/ingest-details",
                               json={"contact_id": task["contact_id"],
                                     "items": items,
-                                    "source": "portal_watch"}).json()
+                                    "source": "portal_watch",
+                                    "announce": True}).json()
                 note += f" · {len(rd.get('enriched', []))} enrichies"
                 print(f"    hub: {len(rd.get('enriched', []))} enrichie(s), "
                       f"{len(rd.get('unmatched', []))} sans correspondance")
+                _print_announcement(rd.get("announced") or {})
+            else:
+                _print_announcement(
+                    {"_": r.get("announced")} if r.get("announced") else {})
             if task["id"] is not None:
                 api.post(f"/connectors/matrix/link-queue/{task['id']}",
                          json={"status": "done", "note": note[:280]})
