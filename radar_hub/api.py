@@ -1446,8 +1446,12 @@ def vitrine_features(token: str, db: Session = Depends(get_db),
                      t: str = Depends(tenant)):
     """Which portal capabilities are on for this tenant + their settings and
     the client's listing photos. Demo token gets everything (showroom mode)."""
+    # Every flag the portal UI gates on must be listed here: a key missing
+    # from this payload reads as OFF in the browser, so the feature exists
+    # server-side and is invisible to the client.
     keys = ["listing_photos", "visit_scheduler_live", "offer_checklist",
-            "portal_pwa", "real_map", "co_buyer", "mortgage_handoff"]
+            "portal_pwa", "real_map", "co_buyer", "mortgage_handoff",
+            "client_documents"]
     if token == "demo":
         flags = {k: True for k in keys}
         photos: dict = {}

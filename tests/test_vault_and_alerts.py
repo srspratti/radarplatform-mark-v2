@@ -149,6 +149,30 @@ def test_notes_thread_runs_both_ways(client, db):
     assert again["unread_before"] == 0         # reading marks it read
 
 
+def test_every_flag_the_portal_gates_on_is_in_the_features_payload(client, db):
+    """A key missing from /vitrine/features reads as OFF in the browser, so
+    the feature ships server-side and stays invisible to the client — which
+    is exactly how the « Mon dossier » tab went missing. Guard it: whatever
+    the portal calls featOn() on must appear in the payload."""
+    import pathlib
+    import re
+    src = pathlib.Path(__file__).resolve().parents[1] / "apps/vitrine/src"
+    gated = set()
+    for f in src.glob("*.jsx"):
+        gated |= set(re.findall(r'featOn\("([a-z_]+)"\)', f.read_text()))
+    assert "client_documents" in gated          # the file this test guards
+    c = _client(db)
+    served = set(client.get(f"/api/vitrine/features/{c.portal_token}")
+                 .json()["features"])
+    assert gated <= served, f"not served to the portal: {sorted(gated - served)}"
+
+
+def test_the_portal_sees_the_vault_flag_enabled(client, db):
+    c = _client(db)
+    flags = client.get(f"/api/vitrine/features/{c.portal_token}").json()["features"]
+    assert flags["client_documents"] is True
+
+
 def test_vault_rejects_an_unknown_token(client, db):
     assert client.get("/api/vitrine/vault/not-a-token").status_code == 401
 
