@@ -320,3 +320,48 @@ def test_an_unlabeled_dollar_figure_is_never_read_as_the_price(client, db):
     items = parse_detailed_pdf(_mini_pdf(DETAILED_TEXT))   # taxes only
     assert "price" not in items[0]
     assert items[0]["taxes_mun"] == 3311
+
+
+def test_import_reports_how_many_listings_still_lack_a_price(client, db):
+    """The portal hides the microsite until the price is known, so every
+    import says how many cards are still half-built."""
+    c = _stub_client(client)
+    r = client.post("/api/connectors/matrix/ingest-numbers",
+                    json={"contact_id": c["id"],
+                          "numbers": ["12149325", "24256061"]}).json()
+    assert r["price_gap"]["without_price"] == 2
+    r2 = client.post("/api/connectors/matrix/ingest-pdf",
+                     json={"contact_id": c["id"],
+                           "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES))}).json()
+    assert r2["price_gap"]["without_price"] == 0
+
+
+def test_parse_preview_reads_without_writing(client, db):
+    """Diagnosing a board layout must never touch the client's book."""
+    from radar_hub.models import Listing
+    c = _stub_client(client)
+    r = client.post("/api/connectors/matrix/parse-preview",
+                    json={"contact_id": c["id"],
+                          "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES)),
+                          "filename": "grille.pdf"}).json()
+    assert r["mode"] == "grid" and r["with_price"] == 2
+    assert r["cards"][0]["price"] == 449900
+    assert db.query(Listing).filter_by(contact_id=c["id"]).count() == 0
+
+
+def test_parse_preview_flags_a_numbers_only_document(client, db):
+    c = _stub_client(client)
+    r = client.post("/api/connectors/matrix/parse-preview",
+                    json={"contact_id": c["id"],
+                          "content_b64": _b64(_mini_pdf(
+                              "Centris No. : 12149325\nCentris No. : 24256061"))}
+                    ).json()
+    assert r["mode"] == "numbers" and len(r["numbers"]) == 2
+
+
+def test_a_grid_dropped_without_a_client_says_which_control_to_use(client, db):
+    r = client.post("/api/connectors/matrix/ingest-pdf",
+                    json={"contact_id": 0,
+                          "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES))})
+    assert r.status_code == 422
+    assert "Grille pour" in r.json()["detail"]

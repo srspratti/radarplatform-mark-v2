@@ -442,6 +442,22 @@ def matrix_poll(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return mx.poll_matrix_inbox(db, t)
 
 
+def _price_gap(db: Session, t: str, contact_ids) -> dict:
+    """How many of these clients' listings still have no price. The portal
+    hides the microsite behind a known price (it is a price-centric page), so
+    this number is exactly "how many cards are still half-built" — worth
+    reporting on every import instead of leaving the broker to notice it in
+    the portal days later."""
+    ids = [i for i in dict.fromkeys(contact_ids) if i]
+    if not ids:
+        return {}
+    rows = (db.query(Listing)
+            .filter(Listing.tenant_id == t, Listing.contact_id.in_(ids)).all())
+    missing = [r.centris_no for r in rows if not r.price]
+    return {"listings": len(rows), "without_price": len(missing),
+            "without_price_nos": missing[:12]}
+
+
 class PdfIngestIn(BaseModel):
     contact_id: int = 0   # 0 + detailed PDF = route by Centris no. (all clients)
     content_b64: str
@@ -525,11 +541,18 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
         return {"mode": "detailed", "parsed_rows": len(items),
                 "enriched": enriched, "unmatched": unmatched,
                 "listings_new": created, "photos_added": photos_added,
-                "fields_filled": sorted(filled), "announced": ann}
+                "fields_filled": sorted(filled), "announced": ann,
+                "price_gap": _price_gap(db, t, touched)}
     if not c:
-        raise HTTPException(422, "PDF de grille : choisir le client "
-                                 "(contact_id requis — la grille ne dit pas à "
-                                 "qui elle appartient)")
+        # The grid carries no client identity — only the broker knows whose
+        # search produced it. Say so in terms of the control the broker is
+        # looking at, not in terms of the API field.
+        raise HTTPException(422,
+                            "PDF de grille : choisir « Grille pour <client> » "
+                            "dans le menu déroulant avant de déposer (le "
+                            "réglage « routage auto » ne vaut que pour les "
+                            "PDF détaillés — une grille ne dit pas à quel "
+                            "client elle appartient).")
     cards = matrix_pdf.parse_matrix_pdf_text(text)
     if not cards:
         # Browser-printed portal page: identifiers only → stub listings,
@@ -556,6 +579,7 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
             return {"mode": "numbers", "parsed_rows": len(numbers),
                     "listings_new": created, "listings_dup": dup,
                     "ddf": ddf_result, "announced": ann,
+                    "price_gap": _price_gap(db, t, [c.id]),
                     "note": "identifiants seulement — enrichir via DDF® ou "
                             "un PDF détaillé"}
     if not cards:
@@ -567,7 +591,51 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
     raw_id = (f"pdf-{body.filename}" if body.filename
               else f"pdf-{utcnow():%Y%m%d%H%M%S}")
     out = mx.store_listings(db, t, c, cards, raw_id=raw_id)
-    return {"parsed_rows": len(cards), **out}
+    return {"mode": "grid", "parsed_rows": len(cards), **out,
+            "price_gap": _price_gap(db, t, [c.id])}
+
+
+@router.post("/connectors/matrix/parse-preview", dependencies=[Depends(auth)])
+def matrix_parse_preview(body: PdfIngestIn, db: Session = Depends(get_db),
+                         t: str = Depends(tenant)):
+    """What the parser SEES in this PDF — nothing is written. When a card is
+    missing a price, this says whether the document never carried one or the
+    parser failed to read it, which is the difference between a data problem
+    and a code problem. Returns a text sample so an unfamiliar board layout
+    can be diagnosed without asking for the client's document."""
+    import base64 as _b64
+    from .connectors import matrix_pdf
+    try:
+        raw = _b64.b64decode(body.content_b64)
+        text = matrix_pdf.extract_pdf_text(raw)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(422, "contenu base64 invalide")
+    out: dict = {"filename": body.filename, "chars": len(text)}
+    if matrix_pdf.is_detailed_pdf(text):
+        items = matrix_pdf.parse_detailed_pdf(raw)
+        out["mode"] = "detailed"
+        out["items"] = [{k: v for k, v in it.items() if k != "photos"}
+                        | {"photos": len(it.get("photos") or [])}
+                        for it in items[:20]]
+        out["with_price"] = sum(1 for it in items if it.get("price"))
+    else:
+        cards = matrix_pdf.parse_matrix_pdf_text(text)
+        if cards:
+            out["mode"] = "grid"
+            out["cards"] = cards[:20]
+            out["with_price"] = sum(1 for c in cards if c.get("price"))
+            out["with_address"] = sum(1 for c in cards if c.get("address"))
+        else:
+            out["mode"] = "numbers"
+            out["numbers"] = matrix_pdf.parse_mls_numbers(text)[:40]
+            out["note"] = ("aucune ligne de grille reconnue — ce PDF sera "
+                           "importé comme identifiants seulement")
+    # A short, redacted window of the raw extraction: enough to see the row
+    # layout, not the whole document.
+    out["text_sample"] = text[:1200]
+    return out
 
 
 class PortalDetailsIn(BaseModel):
@@ -740,7 +808,7 @@ def matrix_ingest_numbers(body: NumbersIn, db: Session = Depends(get_db),
             db, t, c, raw_id=f"num-{c.id}-{utcnow():%Y%m%d%H%M}")
     return {"mode": "numbers", "parsed_rows": len(numbers),
             "listings_new": created, "listings_dup": dup, "ddf": ddf_result,
-            "announced": ann,
+            "announced": ann, "price_gap": _price_gap(db, t, [c.id]),
             "note": "identifiants seulement — enrichir via DDF® ou un PDF "
                     "détaillé"}
 

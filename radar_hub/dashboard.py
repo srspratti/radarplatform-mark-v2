@@ -416,6 +416,88 @@ function CriteriaField({f, val, set}) {
   </select>;
 }
 
+// Shared PDF importer: progress while the server parses (a 27-listing album
+// takes real seconds) and a PER-FILE report that stays on screen. The old
+// one-line toast joined every result — including failures — into a single
+// non-error message, so "grid PDF dropped with auto-route selected" looked
+// exactly like success and the listings silently kept no price.
+function PdfImport({cid, multiple, label, hint, toast, onDone}) {
+  const [jobs,setJobs]=useState(null);   // [{name, state, line, err}]
+  const [busy,setBusy]=useState(false);
+  const pct = jobs ? Math.round(100*jobs.filter(j=>j.state!=="wait"&&j.state!=="run").length/jobs.length) : 0;
+  const describe=(r,name)=>{
+    const bits=[];
+    if(r.mode==="detailed"){
+      bits.push(T(`${r.enriched.length} fiche(s) enrichie(s)`,`${r.enriched.length} sheet(s) enriched`));
+      if(r.fields_filled&&r.fields_filled.length) bits.push(T(`champs remplis : ${r.fields_filled.join(", ")}`,`fields filled: ${r.fields_filled.join(", ")}`));
+      if(r.photos_added) bits.push(`${r.photos_added} 📷`);
+      if(r.unmatched&&r.unmatched.length) bits.push(T(`${r.unmatched.length} sans preneur`,`${r.unmatched.length} unmatched`));
+    } else if(r.mode==="numbers"){
+      bits.push(T(`${r.listings_new} nº Centris importé(s)`,`${r.listings_new} Centris no. imported`));
+      bits.push(T("identifiants seulement — déposer la grille (my:Partial) pour les prix",
+                  "identifiers only — drop the grid (my:Partial) for prices"));
+    } else {
+      bits.push(T(`${r.parsed_rows} ligne(s) lues · ${r.listings_new} nouvelle(s)`,`${r.parsed_rows} row(s) read · ${r.listings_new} new`));
+      if(r.listings_filled) bits.push(T(`${r.listings_filled} fiche(s) complétée(s)`,`${r.listings_filled} listing(s) completed`));
+    }
+    const ann=r.announced && (r.announced.announced!==undefined?r.announced:Object.values(r.announced)[0]);
+    if(ann&&ann.announced) bits.push(T(`avis client : courriel ${ann.email}, texto ${ann.sms}`,`client notified: email ${ann.email}, SMS ${ann.sms}`));
+    return bits.join(" · ");
+  };
+  const run=async(files)=>{
+    if(!files.length) return;
+    setBusy(true);
+    let list=files.map(f=>({name:f.name,state:"wait",line:""}));
+    setJobs(list);
+    let gap=null, failed=0;
+    for(let i=0;i<files.length;i++){
+      list=list.map((j,k)=>k===i?{...j,state:"run"}:j); setJobs([...list]);
+      try{
+        const f=files[i];
+        const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+          rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+        const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
+          body:JSON.stringify({contact_id:typeof cid==="function"?cid():cid, content_b64:b64, filename:f.name})});
+        if(r.price_gap&&r.price_gap.listings!==undefined) gap=r.price_gap;
+        list=list.map((j,k)=>k===i?{...j,state:"ok",line:describe(r,f.name)}:j);
+      }catch(err){ failed++;
+        list=list.map((j,k)=>k===i?{...j,state:"err",line:err.message}:j); }
+      setJobs([...list]);
+    }
+    setBusy(false);
+    if(gap && gap.without_price>0)
+      list=[...list,{name:"—",state:"warn",
+        line:T(`${gap.without_price} inscription(s) sur ${gap.listings} n'ont toujours pas de prix : le microsite reste masqué tant que le prix est inconnu. Déposer l'export de la GRILLE (my:Partial) avec « Grille pour <client> » sélectionné.`,
+               `${gap.without_price} of ${gap.listings} listings still have no price: the microsite stays hidden while the price is unknown. Drop the GRID export (my:Partial) with "Grid for <client>" selected.`)}];
+    setJobs([...list]);
+    if(failed) toast(T(`${failed} fichier(s) en échec — voir le rapport`,`${failed} file(s) failed — see the report`),true);
+    if(onDone) onDone();
+  };
+  return <>
+    <label className={"mono text-[10px] px-3 py-1.5 rounded border cursor-pointer inline-block "+(busy?"border-[var(--line)]/40 text-[var(--mute)]":"border-[var(--line)] hover:border-[var(--amber)]")}>
+      {busy?T("Traitement…","Processing…"):label}
+      <input type="file" accept="application/pdf" multiple={!!multiple} className="hidden" disabled={busy}
+        onChange={e=>{ run([...(e.target.files||[])]); e.target.value=""; }}/>
+    </label>
+    {jobs && <div className="mt-2 rounded border border-[var(--line)] bg-black/20 p-2">
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex-1 h-1.5 rounded-full bg-[var(--line)]/40 overflow-hidden">
+          <div className="h-full bg-[var(--amber)] transition-all duration-300" style={{width:pct+"%"}}/>
+        </div>
+        <span className="mono text-[10px] text-[var(--mute)] w-9 text-right">{pct}%</span>
+        {!busy && <button onClick={()=>setJobs(null)} className="mono text-[10px] text-[var(--mute)] hover:text-white">✕</button>}
+      </div>
+      {jobs.map((j,i)=>(
+        <div key={i} className="mono text-[10px] py-0.5 flex gap-1.5 items-start">
+          <span className="shrink-0">{j.state==="ok"?"✓":j.state==="err"?"✕":j.state==="warn"?"⚠":j.state==="run"?"…":"·"}</span>
+          <span className={"shrink-0 truncate max-w-[140px] "+(j.state==="err"?"text-red-300":j.state==="warn"?"amber":"text-[var(--ink)]")}>{j.name}</span>
+          <span className={j.state==="err"?"text-red-300":j.state==="warn"?"amber":"text-[var(--mute)]"}>{j.line||(j.state==="run"?T("analyse du PDF…","parsing the PDF…"):"")}</span>
+        </div>))}
+    </div>}
+    {hint && <div className="mono text-[10px] text-[var(--mute)] mt-2">{hint}</div>}
+  </>;
+}
+
 // Proof-read the client-facing alert email before it ever goes out: preview
 // renders the real template in a new tab, test sends one real copy. Neither
 // marks a listing as announced nor writes an event.
@@ -712,27 +794,9 @@ function ContactsView({toast, on, feats}) {
           {contacts.filter(c=>c.lifecycle==="client").map(c=>(
             <option key={c.id} value={c.id}>{T("Grille pour","Grid for")} {c.name}</option>))}
         </select>
-        <label className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer">
-          {T("📄 Importer PDF Matrix…","📄 Import Matrix PDFs…")}
-          <input type="file" accept="application/pdf" multiple className="hidden" onChange={async(e)=>{
-            const files=[...(e.target.files||[])]; if(!files.length) return;
-            const cid=+document.getElementById("pdfclient").value;
-            let msgs=[];
-            for (const f of files){
-              const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
-                rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
-              try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
-                  body:JSON.stringify({contact_id:cid, content_b64:b64, filename:f.name})});
-                msgs.push(r.mode==="detailed"
-                  ? `${f.name}: ${r.enriched.length} ${T("enrichie(s)","enriched")}${r.unmatched&&r.unmatched.length?` · ${r.unmatched.length} ${T("sans preneur","unmatched")}`:""} · ${r.photos_added}📷`
-                  : r.mode==="numbers"
-                  ? `${f.name}: ${r.listings_new} ${T("nº Centris importé(s)","Centris no. imported")}${r.ddf?` · DDF ${r.ddf.enriched} ${T("enrichie(s)","enriched")}`:T(" (enrichir via DDF/PDF détaillé)"," (enrich via DDF/detailed PDF)")}`
-                  : `${f.name}: ${r.listings_new} ${T("nouvelle(s)","new")}`);
-              }catch(err){ msgs.push(`${f.name}: ${err.message}`); }
-            }
-            toast(msgs.join("  |  "), false); e.target.value="";
-          }}/>
-        </label>
+        <PdfImport multiple toast={toast}
+          cid={()=>+document.getElementById("pdfclient").value}
+          label={T("📄 Importer PDF Matrix…","📄 Import Matrix PDFs…")}/>
       </span>
     </div>
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -848,33 +912,8 @@ function ContactsView({toast, on, feats}) {
         </div>}
         <div className="panel p-3 mt-3">
           <div className="mono text-[10px] amber mb-2">{T("▮ IMPORT PDF MATRIX — tableaux sans inscriptions dans le courriel","▮ MATRIX PDF IMPORT — boards with link-only emails")}</div>
-          <label className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer inline-block">
-            {T("📄 Déposer le PDF des résultats…","📄 Drop the results PDF…")}
-            <input type="file" accept="application/pdf" className="hidden" onChange={async(e)=>{
-              const f=e.target.files && e.target.files[0]; if(!f) return;
-              const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
-                rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
-              try{ const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
-                  body:JSON.stringify({contact_id:sel.id, content_b64:b64, filename:f.name})});
-                // Le client est prévenu par le hub (courriel à SON adresse +
-                // texto) — le dire ici, sinon le courtier ne sait pas si
-                // l'avis est parti.
-                const ann=r.announced && (r.announced.announced!==undefined
-                  ? r.announced
-                  : Object.values(r.announced)[0]);
-                const tail = ann && ann.announced
-                  ? T(` · avis client : ${ann.announced} inscription(s) — courriel ${ann.email}, texto ${ann.sms}`,
-                      ` · client notified: ${ann.announced} listing(s) — email ${ann.email}, SMS ${ann.sms}`)
-                  : "";
-                toast((r.mode==="detailed"
-                  ? T(`${r.parsed_rows} fiche(s) enrichie(s) — année, pièces, taxes, description · ${r.photos_added} photo(s) importée(s)`,
-                      `${r.parsed_rows} sheet(s) enriched — year, rooms, taxes, description · ${r.photos_added} photo(s) imported`)
-                  : T(`${r.parsed_rows} ligne(s) lues — ${r.listings_new} nouvelle(s) inscription(s), ${r.listings_dup} déjà connue(s)`,
-                      `${r.parsed_rows} row(s) read — ${r.listings_new} new listing(s), ${r.listings_dup} already known`))+tail); }
-              catch(err){ toast(err.message,true); }
-              e.target.value="";
-            }}/>
-          </label>
+          <PdfImport multiple cid={sel.id} toast={toast}
+            label={T("📄 Déposer le(s) PDF des résultats…","📄 Drop the results PDF(s)…")}/>
           <div className="mono text-[10px] text-[var(--mute)] mt-2">
             {T("Dans Matrix : résultats → Sélectionner tout → Imprimer PDF. Grille (my:Partial) = crée les inscriptions · « Client Detailed with Photo Album » = les ENRICHIT (année, pièces → plan 3D, taxes, description, photos). Aussi automatique : envoyer le PDF par courriel à l'adresse d'admission du client.",
                "In Matrix: results → Select all → Print PDF. Grid (my:Partial) = creates the listings · 'Client Detailed with Photo Album' = ENRICHES them (year, rooms → 3D plan, taxes, description, photos). Also automatic: email the PDF to the client's intake address.")}
