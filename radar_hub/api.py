@@ -6,7 +6,8 @@ from __future__ import annotations
 import hmac
 import json
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
+                     HTTPException, Request)
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -14,14 +15,15 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import (ConsentRecord, Contact, ContentItem, Event, Expense,
                      FollowUp, GeoCache, LedgerEntry, Listing, ListingPhoto,
-                     NotificationItem, OutboundMessage, PortalKV,
-                     ProspectCandidate, SellerProspect, WritebackItem,
-                     get_db, utcnow)
+                     MatrixLinkTask, NotificationItem, OutboundMessage,
+                     PortalDocument, PortalKV, PortalNote, ProspectCandidate,
+                     SellerProspect, WritebackItem, get_db, utcnow)
 from .events import ingest_event, FAMILIES
 from . import features, llm
 from .scoring import engagement_breakdown, refresh_priority
 from .stages import STAGE_LABELS_FR, STAGE_ORDER
 from .connectors import fub as fub_conn
+from .connectors import gohighlevel as ghl_conn
 from .connectors import matrix_email as mx
 from .connectors import vitrine as vit
 from .agents import office_manager as office
@@ -232,6 +234,73 @@ def client_detail(contact_id: int, db: Session = Depends(get_db),
     return _client_rich(db, t, c)
 
 
+@router.get("/criteria/schema", dependencies=[Depends(auth)])
+def criteria_schema_get(lang: str = "fr", audience: str = "broker"):
+    """The Centris-shaped search vocabulary both forms render from: field
+    groups, enumerated options, bilingual labels, and — honestly — which
+    fields actually reach the licensed feed today."""
+    from . import criteria_schema
+    return criteria_schema.schema(lang, audience)
+
+
+class BrokerCriteriaIn(BaseModel):
+    """The broker's curated search for one client — the hub-side equivalent
+    of a Matrix saved search. Accepts the full Centris-shaped vocabulary
+    (see /api/criteria/schema); unknown keys are dropped by normalize()."""
+    model_config = {"extra": "allow"}
+    note: str = ""      # why the broker set it this way
+
+
+@router.get("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_get(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Both channels side by side: what the broker curated, what the client
+    asked for. Either may be null."""
+    from .connectors import criteria as crit
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    prov, err = crit.auto_provider()
+    return {"broker": c.broker_criteria or None,
+            "client": crit.client_prefs(db, t, c),
+            "provider": prov.name if prov else "aucun",
+            "error": err or None}
+
+
+@router.put("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_put(contact_id: int, body: BrokerCriteriaIn,
+                 background: BackgroundTasks, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Set the broker's curated search and sweep for it right away."""
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    from . import criteria_schema
+    raw = body.model_dump()
+    note = str(raw.pop("note", ""))[:290]
+    # normalize() coerces ranges/ints/multis and swaps an inverted range;
+    # from_legacy() lets an old flat payload keep working.
+    crit = criteria_schema.from_legacy(raw)
+    if note:
+        crit["note"] = note
+    c.broker_criteria = crit
+    db.commit()
+    background.add_task(_sweep_criteria_async, t, c.id)
+    return {"contact_id": c.id, "broker": crit}
+
+
+@router.delete("/clients/{contact_id}/criteria", dependencies=[Depends(auth)])
+def criteria_del(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    """Drop the curated search; the client's own criteria keep running."""
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    c.broker_criteria = None
+    db.commit()
+    return {"contact_id": c.id, "broker": None}
+
+
 @router.get("/dashboard/clients-rich", dependencies=[Depends(auth)])
 def clients_rich(db: Session = Depends(get_db), t: str = Depends(tenant)):
     """One call for the realtor dashboard adapter: every client with timeline,
@@ -262,6 +331,101 @@ def fub_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return fub_conn.flush_writebacks(db, t)
 
 
+@router.post("/connectors/ghl/import", dependencies=[Depends(auth)])
+def ghl_import(limit: int = 100, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    return ghl_conn.import_from_ghl(db, t, ghl_conn.GHLClient(), limit=limit)
+
+
+@router.post("/connectors/ghl/flush-writebacks", dependencies=[Depends(auth)])
+def ghl_flush(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    return ghl_conn.flush_writebacks_ghl(db, t)
+
+
+@router.get("/connectors/ddf/status", dependencies=[Depends(auth)])
+def ddf_status():
+    from .connectors import ddf
+    return {"configured": ddf.DDFClient().configured,
+            "how_to": "Flux DDF® de l'ACI/CREA (crea.ca) — pool national, "
+                      "destination « outil de membre »; brancher "
+                      "DDF_CLIENT_ID/SECRET une fois approuvé."}
+
+
+@router.post("/connectors/ddf/enrich", dependencies=[Depends(auth)])
+def ddf_enrich(limit: int = 50, db: Session = Depends(get_db),
+               t: str = Depends(tenant)):
+    """Licensed enrichment sweep: every listing the DDF® feed hasn't touched
+    yet gets facts + photos by MLS number."""
+    from .connectors import ddf
+    return ddf.sweep(db, t, limit=limit)
+
+
+@router.post("/connectors/ddf/match", dependencies=[Depends(auth)])
+def ddf_match(top: int = 20, db: Session = Depends(get_db),
+              t: str = Depends(tenant)):
+    """Licensed criteria sweep: run each client's saved Vitrine criteria
+    against the DDF® pool and file the matches into their inventory — the
+    fully-programmatic, ToS-clean replacement for reading the Matrix portal."""
+    from .connectors import ddf
+    return ddf.match_criteria(db, t, top=top)
+
+
+@router.post("/connectors/criteria/match", dependencies=[Depends(auth)])
+def criteria_match(top: int = 20, db: Session = Depends(get_db),
+                   t: str = Depends(tenant)):
+    """Provider-neutral criteria sweep: every portal client's saved Vitrine
+    criteria run against whichever feed is available (licensed DDF® when
+    configured; the demo generator only if switched on deliberately)."""
+    from .connectors import criteria
+    return criteria.match_criteria(db, t, top=top)
+
+
+@router.get("/connectors/criteria/status", dependencies=[Depends(auth)])
+def criteria_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
+    from .connectors import criteria
+    prov, err = criteria.auto_provider()
+    n = (db.query(PortalKV)
+         .filter_by(tenant_id=t, key=criteria.PREFS_KEY).count())
+    return {"provider": prov.name if prov else "aucun",
+            "clients_with_criteria": n,
+            "demo": bool(prov and prov.name == "demo"),
+            "error": err or None}
+
+
+@router.get("/connectors/sourceimmo/status", dependencies=[Depends(auth)])
+def sourceimmo_status():
+    from .connectors import source_immo
+    return {"configured": source_immo.SourceImmoClient().configured,
+            "how_to": "Distributeur certifié Centris (source.immo / ID-3): "
+                      "le courtier signe l'autorisation de distribution de "
+                      "données Centris, puis brancher SOURCEIMMO_ACCOUNT_ID/"
+                      "API_KEY."}
+
+
+@router.post("/connectors/sourceimmo/enrich", dependencies=[Depends(auth)])
+def sourceimmo_enrich(limit: int = 50, db: Session = Depends(get_db),
+                      t: str = Depends(tenant)):
+    """Certified-distributor sweep: Centris-native facts + photos by listing
+    number (composes with DDF® — already-enriched rows are skipped)."""
+    from .connectors import source_immo
+    return source_immo.sweep(db, t, limit=limit)
+
+
+@router.get("/connectors/crm/status", dependencies=[Depends(auth)])
+def crm_status():
+    from .connectors import crm
+    return crm.status()
+
+
+@router.post("/connectors/crm/sync", dependencies=[Depends(auth)])
+def crm_sync(limit: int = 100, db: Session = Depends(get_db),
+             t: str = Depends(tenant)):
+    """CRM-agnostic: import + flush on every configured CRM — the one
+    endpoint to schedule regardless of which CRM a deployment uses."""
+    from .connectors import crm
+    return crm.sync_all(db, t, limit=limit)
+
+
 class RawEmailIn(BaseModel):
     raw: str
     message_id: str = ""
@@ -276,6 +440,469 @@ def matrix_ingest_raw(body: RawEmailIn, db: Session = Depends(get_db),
 @router.post("/connectors/matrix/poll", dependencies=[Depends(auth)])
 def matrix_poll(db: Session = Depends(get_db), t: str = Depends(tenant)):
     return mx.poll_matrix_inbox(db, t)
+
+
+def _price_gap(db: Session, t: str, contact_ids) -> dict:
+    """How many of these clients' listings still have no price. The portal
+    hides the microsite behind a known price (it is a price-centric page), so
+    this number is exactly "how many cards are still half-built" — worth
+    reporting on every import instead of leaving the broker to notice it in
+    the portal days later."""
+    ids = [i for i in dict.fromkeys(contact_ids) if i]
+    if not ids:
+        return {}
+    rows = (db.query(Listing)
+            .filter(Listing.tenant_id == t, Listing.contact_id.in_(ids)).all())
+    missing = [r.centris_no for r in rows if not r.price]
+    return {"listings": len(rows), "without_price": len(missing),
+            "without_price_nos": missing[:12]}
+
+
+class PdfIngestIn(BaseModel):
+    contact_id: int = 0   # 0 + detailed PDF = route by Centris no. (all clients)
+    content_b64: str
+    filename: str = ""
+
+
+@router.post("/connectors/matrix/ingest-pdf", dependencies=[Depends(auth)])
+def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
+                      t: str = Depends(tenant)):
+    """Link-only boards: the realtor exports the auto-email results from
+    Matrix (select All → Print/Email PDF, detailed format) and drops the PDF
+    here — its rows become the client's Vitrine listings (deduped, mirrored
+    by alert_mailer exactly like email-parsed cards)."""
+    import base64 as _b64
+    from .connectors import matrix_pdf
+    c = db.get(Contact, body.contact_id) if body.contact_id else None
+    if body.contact_id and (not c or c.tenant_id != t):
+        raise HTTPException(404, "contact introuvable")
+    if len(body.content_b64) > 27_000_000:  # ~20 MB decoded
+        raise HTTPException(422, "PDF trop lourd (max ~20 Mo)")
+    raw = _b64.b64decode(body.content_b64)
+    try:
+        text = matrix_pdf.extract_pdf_text(raw)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    # Client Detailed export → ENRICHMENT: year/areas/taxes/rooms/remarks into
+    # Listing.details, album photos into listing_photos. Without a contact_id
+    # the sheet routes ITSELF: every client holding that Centris no. gets the
+    # enrichment (drop one album, enrich the whole book).
+    if matrix_pdf.is_detailed_pdf(text):
+        items = matrix_pdf.parse_detailed_pdf(raw)
+        created = photos_added = 0
+        enriched, unmatched = [], []
+        touched: list[int] = []
+        filled: set[str] = set()
+        for item in items:
+            no = item["centris_no"]
+            q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
+            if c:
+                q = q.filter_by(contact_id=c.id)
+            rows = q.all()
+            if not rows and c:
+                row = Listing(tenant_id=t, contact_id=c.id, centris_no=no,
+                              address=item.get("address", ""))
+                db.add(row)
+                created += 1
+                rows = [row]
+            if not rows:
+                unmatched.append(no)
+                continue
+            touched.extend(r.contact_id for r in rows)
+            for row in rows:
+                det = dict(row.details or {})
+                det.update({k: v for k, v in item.items()
+                            if k not in ("centris_no", "photos") and v})
+                row.details = det
+                # Facts the sheet states about the property itself belong in
+                # the COLUMNS too — the portal cards read price/beds/baths
+                # from there, so a sheet that only fed `details` left a
+                # listing showing « Prix à confirmer » with the price sitting
+                # right there in the JSON. Empty columns only: never clobber.
+                filled |= set(mx.fill_listing(row, item))
+            db.commit()
+            enriched.append(no)
+            if item["photos"] and features.enabled("listing_photos"):
+                if not (db.query(ListingPhoto)
+                        .filter_by(tenant_id=t, centris_no=no).first()):
+                    for i2, blob in enumerate(item["photos"]):
+                        db.add(ListingPhoto(tenant_id=t, centris_no=no,
+                                            mime="image/jpeg", sort=i2,
+                                            content=_b64.b64encode(blob).decode()))
+                        photos_added += 1
+                    db.commit()
+        # Enriching an already-announced book sends nothing (those rows carry
+        # an announced_at stamp); a detailed PDF dropped as the FIRST import
+        # for a client is what reaches the announcement sweep here.
+        from .automations import announce_for_contacts
+        ann = announce_for_contacts(
+            db, t, touched, raw_id=f"pdfdet-{body.filename or ''}"
+        ) if touched else {}
+        return {"mode": "detailed", "parsed_rows": len(items),
+                "enriched": enriched, "unmatched": unmatched,
+                "listings_new": created, "photos_added": photos_added,
+                "fields_filled": sorted(filled), "announced": ann,
+                "price_gap": _price_gap(db, t, touched)}
+    if not c:
+        # The grid carries no client identity — only the broker knows whose
+        # search produced it. Say so in terms of the control the broker is
+        # looking at, not in terms of the API field.
+        raise HTTPException(422,
+                            "PDF de grille : choisir « Grille pour <client> » "
+                            "dans le menu déroulant avant de déposer (le "
+                            "réglage « routage auto » ne vaut que pour les "
+                            "PDF détaillés — une grille ne dit pas à quel "
+                            "client elle appartient).")
+    cards = matrix_pdf.parse_matrix_pdf_text(text)
+    if not cards:
+        # Browser-printed portal page: identifiers only → stub listings,
+        # substance comes from the licensed DDF® feed (or a detailed PDF).
+        numbers = matrix_pdf.parse_mls_numbers(text)
+        if numbers:
+            created = dup = 0
+            for no in numbers:
+                if (db.query(Listing)
+                        .filter_by(tenant_id=t, contact_id=c.id,
+                                   centris_no=no).first()):
+                    dup += 1
+                    continue
+                db.add(Listing(tenant_id=t, contact_id=c.id, centris_no=no))
+                created += 1
+            db.commit()
+            ddf_result = None
+            if settings.DDF_CLIENT_ID:
+                from .connectors import ddf
+                ddf_result = ddf.sweep(db, t)
+            from .automations import announce_new_listings
+            stamp = body.filename or f"{utcnow():%Y%m%d%H%M%S}"
+            ann = announce_new_listings(db, t, c, raw_id=f"pdfnum-{stamp}")
+            return {"mode": "numbers", "parsed_rows": len(numbers),
+                    "listings_new": created, "listings_dup": dup,
+                    "ddf": ddf_result, "announced": ann,
+                    "price_gap": _price_gap(db, t, [c.id]),
+                    "note": "identifiants seulement — enrichir via DDF® ou "
+                            "un PDF détaillé"}
+    if not cards:
+        raise HTTPException(422,
+                            "Aucune inscription reconnue dans ce PDF — "
+                            "utiliser un export de la grille de résultats "
+                            "(my:Partial, Client Detailed…), pas un rapport "
+                            "photo seul.")
+    raw_id = (f"pdf-{body.filename}" if body.filename
+              else f"pdf-{utcnow():%Y%m%d%H%M%S}")
+    out = mx.store_listings(db, t, c, cards, raw_id=raw_id)
+    return {"mode": "grid", "parsed_rows": len(cards), **out,
+            "price_gap": _price_gap(db, t, [c.id])}
+
+
+@router.post("/connectors/matrix/parse-preview", dependencies=[Depends(auth)])
+def matrix_parse_preview(body: PdfIngestIn, db: Session = Depends(get_db),
+                         t: str = Depends(tenant)):
+    """What the parser SEES in this PDF — nothing is written. When a card is
+    missing a price, this says whether the document never carried one or the
+    parser failed to read it, which is the difference between a data problem
+    and a code problem. Returns a text sample so an unfamiliar board layout
+    can be diagnosed without asking for the client's document."""
+    import base64 as _b64
+    from .connectors import matrix_pdf
+    try:
+        raw = _b64.b64decode(body.content_b64)
+        text = matrix_pdf.extract_pdf_text(raw)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(422, "contenu base64 invalide")
+    out: dict = {"filename": body.filename, "chars": len(text)}
+    if matrix_pdf.is_detailed_pdf(text):
+        items = matrix_pdf.parse_detailed_pdf(raw)
+        out["mode"] = "detailed"
+        out["items"] = [{k: v for k, v in it.items() if k != "photos"}
+                        | {"photos": len(it.get("photos") or [])}
+                        for it in items[:20]]
+        out["with_price"] = sum(1 for it in items if it.get("price"))
+    else:
+        cards = matrix_pdf.parse_matrix_pdf_text(text)
+        if cards:
+            out["mode"] = "grid"
+            out["cards"] = cards[:20]
+            out["with_price"] = sum(1 for c in cards if c.get("price"))
+            out["with_address"] = sum(1 for c in cards if c.get("address"))
+        else:
+            out["mode"] = "numbers"
+            out["numbers"] = matrix_pdf.parse_mls_numbers(text)[:40]
+            out["note"] = ("aucune ligne de grille reconnue — ce PDF sera "
+                           "importé comme identifiants seulement")
+    # A short, redacted window of the raw extraction: enough to see the row
+    # layout, not the whole document.
+    out["text_sample"] = text[:1200]
+    return out
+
+
+class PortalDetailsIn(BaseModel):
+    """Per-property facts read off the client portal's Summary view (the
+    internal watcher's --details sweep). Each item: centris_no + optional
+    address/price/beds/baths + a fields dict of mapped facts."""
+    contact_id: int = 0    # 0 = route each item by Centris no. (all clients)
+    items: list[dict]
+    source: str = "portal_watch"
+    # True = once the facts are in, tell every client whose listings are
+    # still unannounced (the internal edition's "extract → update portal →
+    # notify" order). Enrichment of an already-announced book sends nothing.
+    announce: bool = True
+
+
+@router.post("/connectors/matrix/ingest-details", dependencies=[Depends(auth)])
+def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    """Enrich existing listings from structured facts (no PDF): same routing
+    contract as the detailed-PDF path — with contact_id it scopes to that
+    client, without it every client holding the Centris number is enriched.
+    Empty values never erase data already present."""
+    import base64 as _b64
+    import re as _re
+    allowed = {"year", "living_sqft", "lot_sqft", "building_sqft",
+               "taxes_mun", "taxes_school", "style", "building_type",
+               "property_use", "occupancy", "zoning", "remarks", "rooms",
+               "heating", "water_access", "fireplace", "parking", "pool",
+               "water_body", "amenities", "powder", "inclusions",
+               "exclusions", "addendum", "agency", "date_sent"}
+    enriched, unmatched = [], []
+    photos_added = 0
+    touched: list[int] = []
+    for item in body.items[:100]:
+        no = _re.sub(r"\D", "", str(item.get("centris_no", "")))
+        if not (7 <= len(no) <= 8):
+            unmatched.append(str(item.get("centris_no", ""))[:20] or "?")
+            continue
+        q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
+        if body.contact_id:
+            q = q.filter_by(contact_id=body.contact_id)
+        rows = q.all()
+        if not rows:
+            unmatched.append(no)
+            continue
+        fields = {k: v for k, v in (item.get("fields") or {}).items()
+                  if k in allowed and v not in (None, "", 0, [])}
+        touched.extend(r.contact_id for r in rows)
+        for row in rows:
+            det = dict(row.details or {})
+            det.update(fields)
+            det.setdefault("source", body.source[:40])
+            row.details = det
+            # Same one-way column fill every other ingest path uses.
+            mx.fill_listing(row, item)
+        db.commit()
+        # photos are tenant-wide per Centris number — same contract as the
+        # detailed-PDF album (first source wins, capped, feature-gated)
+        pics = item.get("photos_b64") or []
+        if pics and features.enabled("listing_photos") and not (
+                db.query(ListingPhoto)
+                .filter_by(tenant_id=t, centris_no=no).first()):
+            for i2, b64s in enumerate(pics[:40]):
+                try:
+                    blob = _b64.b64decode(b64s)
+                except Exception:  # noqa: BLE001
+                    continue
+                if blob[:2] != b"\xff\xd8":
+                    continue
+                db.add(ListingPhoto(tenant_id=t, centris_no=no,
+                                    mime="image/jpeg", sort=i2,
+                                    content=b64s))
+                photos_added += 1
+            db.commit()
+        enriched.append(no)
+    ann: dict = {}
+    if body.announce and touched:
+        from .automations import announce_for_contacts
+        ann = announce_for_contacts(
+            db, t, touched, raw_id=f"det-{utcnow():%Y%m%d%H%M}")
+    return {"mode": "details", "enriched": enriched, "unmatched": unmatched,
+            "photos_added": photos_added, "parsed_rows": len(body.items),
+            "announced": ann}
+
+
+@router.get("/connectors/matrix/link-queue", dependencies=[Depends(auth)])
+def matrix_link_queue(status: str = "pending",
+                      db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """Portal links remembered from link-only auto-emails. The hub never
+    opens them: a human does (marketable), or the internal-edition watcher
+    (internal/matrix-centris-rpa/portal_link_watcher.py) works the queue."""
+    rows = (db.query(MatrixLinkTask)
+            .filter_by(tenant_id=t, status=status)
+            .order_by(MatrixLinkTask.created_at).limit(200).all())
+    out = []
+    for r in rows:
+        c = db.get(Contact, r.contact_id)
+        out.append({"id": r.id, "contact_id": r.contact_id,
+                    "client": c.name if c else "?", "url": r.url,
+                    "status": r.status, "note": r.note,
+                    "created_at": r.created_at.isoformat()})
+    return out
+
+
+class LinkTaskIn(BaseModel):
+    status: str = "done"   # done|failed|pending
+    note: str = ""
+
+
+@router.post("/connectors/matrix/link-queue/{task_id}",
+             dependencies=[Depends(auth)])
+def matrix_link_mark(task_id: int, body: LinkTaskIn,
+                     db: Session = Depends(get_db), t: str = Depends(tenant)):
+    r = db.get(MatrixLinkTask, task_id)
+    if not r or r.tenant_id != t:
+        raise HTTPException(404, "tâche introuvable")
+    if body.status not in ("done", "failed", "pending"):
+        raise HTTPException(422, "status: done | failed | pending")
+    r.status, r.note = body.status, body.note[:290]
+    r.done_at = utcnow() if body.status == "done" else None
+    db.commit()
+    return {"id": r.id, "status": r.status}
+
+
+class NumbersIn(BaseModel):
+    contact_id: int
+    numbers: list[str]
+    source: str = ""      # provenance note, e.g. "portal_link_watcher"
+    # False = create the rows now, tell the client later. The internal
+    # watcher posts identifiers first and facts second: deferring here means
+    # the client gets ONE email, and it carries the addresses and prices.
+    announce: bool = True
+
+
+@router.post("/connectors/matrix/ingest-numbers", dependencies=[Depends(auth)])
+def matrix_ingest_numbers(body: NumbersIn, db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    """Centris numbers straight in (no PDF): stub listings for one client,
+    substance from the licensed DDF® feed or a detailed PDF. Same contract as
+    ingest-pdf's numbers mode — deduped, re-postable at will."""
+    import re as _re
+    c = db.get(Contact, body.contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    numbers = []
+    for n in body.numbers[:200]:
+        digits = _re.sub(r"\D", "", str(n))
+        if 7 <= len(digits) <= 8 and digits not in numbers:
+            numbers.append(digits)
+    if not numbers:
+        raise HTTPException(422, "aucun numéro Centris valide (7-8 chiffres)")
+    created = dup = 0
+    for no in numbers:
+        if (db.query(Listing)
+                .filter_by(tenant_id=t, contact_id=c.id,
+                           centris_no=no).first()):
+            dup += 1
+            continue
+        db.add(Listing(tenant_id=t, contact_id=c.id, centris_no=no))
+        created += 1
+    db.commit()
+    ddf_result = None
+    if settings.DDF_CLIENT_ID:
+        from .connectors import ddf
+        ddf_result = ddf.sweep(db, t)
+    ann = {"announced": 0, "deferred": True}
+    if body.announce:
+        from .automations import announce_new_listings
+        ann = announce_new_listings(
+            db, t, c, raw_id=f"num-{c.id}-{utcnow():%Y%m%d%H%M}")
+    return {"mode": "numbers", "parsed_rows": len(numbers),
+            "listings_new": created, "listings_dup": dup, "ddf": ddf_result,
+            "announced": ann, "price_gap": _price_gap(db, t, [c.id]),
+            "note": "identifiants seulement — enrichir via DDF® ou un PDF "
+                    "détaillé"}
+
+
+# ------------------------------------------------- alert email: see & test --
+# Rehearsing the client-facing email must not cost a real announcement: both
+# endpoints render the SAME builder the pipeline uses, but neither stamps
+# announced_at nor writes an event, so a listing stays un-announced and the
+# client's engagement score stays clean.
+SAMPLE_CARDS = [
+    {"centris_no": "12345678", "address": "1425 rue Sherbrooke O., Montréal",
+     "price": 749000, "beds": 3, "baths": 2, "prop_type": "Condo"},
+    {"centris_no": "23456789", "address": "88 av. des Pins, Blainville",
+     "price": 525000, "beds": 4, "baths": 2, "prop_type": "Maison"},
+]
+
+
+def _preview_cards(db: Session, t: str, c: Contact, limit: int = 3) -> list[dict]:
+    """The client's own most recent listings — sample cards only when their
+    book is empty, so what you proof-read is what they would receive."""
+    rows = (db.query(Listing).filter_by(tenant_id=t, contact_id=c.id)
+            .order_by(Listing.received_at.desc()).limit(limit).all())
+    if not rows:
+        return SAMPLE_CARDS
+    return [{"centris_no": r.centris_no,
+             "address": r.address or f"Centris {r.centris_no}",
+             "price": r.price, "beds": r.beds, "baths": r.baths,
+             "prop_type": r.prop_type} for r in rows]
+
+
+def _preview_contact(db: Session, t: str, contact_id: int) -> Contact:
+    if contact_id:
+        c = db.get(Contact, contact_id)
+        if not c or c.tenant_id != t:
+            raise HTTPException(404, "contact introuvable")
+        return c
+    c = (db.query(Contact).filter_by(tenant_id=t, lifecycle="client")
+         .order_by(Contact.engagement_score.desc()).first())
+    if not c:
+        raise HTTPException(404, "aucun client — préciser contact_id")
+    return c
+
+
+@router.get("/alert-mail/preview", dependencies=[Depends(auth)])
+def alert_mail_preview(contact_id: int = 0, lang: str = "",
+                       db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """The alert email as the client would see it, rendered in the browser.
+    Open it directly: nothing is sent, nothing is recorded."""
+    from .mailer import build_alert_email
+    c = _preview_contact(db, t, contact_id)
+    if not c.portal_token:
+        c.issue_portal_token()
+        db.commit()
+    _, html, _ = build_alert_email(c, _preview_cards(db, t, c),
+                                   lang or c.language or "fr")
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+class AlertTestIn(BaseModel):
+    contact_id: int = 0
+    to: str = ""        # override recipient — proof it on your own inbox first
+    lang: str = ""
+
+
+@router.post("/alert-mail/test", dependencies=[Depends(auth)])
+def alert_mail_test(body: AlertTestIn, db: Session = Depends(get_db),
+                    t: str = Depends(tenant)):
+    """Send one real copy of the alert email through the configured SMTP.
+    Defaults to the client's own address; pass `to` to proof it on yours.
+    status: sent | simulated (no SMTP_HOST) | failed."""
+    from .mailer import build_alert_email, send_email
+    c = _preview_contact(db, t, contact_id=body.contact_id)
+    if not c.portal_token:
+        c.issue_portal_token()
+        db.commit()
+    to = (body.to or c.email or "").strip()
+    if not to:
+        raise HTTPException(422, "aucun destinataire (contact sans courriel — "
+                                 "préciser `to`)")
+    cards = _preview_cards(db, t, c)
+    subject, html, text = build_alert_email(c, cards, body.lang or c.language
+                                            or "fr")
+    status = send_email(to, subject, html, text)
+    return {"status": status, "to": to, "subject": subject,
+            "listings": len(cards),
+            "used_sample_cards": cards is SAMPLE_CARDS,
+            "smtp_host": settings.SMTP_HOST or "(non configuré)",
+            "from": settings.SMTP_FROM or settings.SMTP_USER or "",
+            "portal_url": f"{settings.PUBLIC_BASE_URL.rstrip('/')}"
+                          f"/portail/{c.portal_token}",
+            "note": "Aucune inscription marquée comme annoncée, aucun "
+                    "événement écrit. Cliquer un lien du courriel enregistre "
+                    "un email.link_clicked pour ce client (c'est le "
+                    "mécanisme de mesure)."}
 
 
 # ---------------------------------------------------------------- webhooks --
@@ -980,8 +1607,12 @@ def vitrine_features(token: str, db: Session = Depends(get_db),
                      t: str = Depends(tenant)):
     """Which portal capabilities are on for this tenant + their settings and
     the client's listing photos. Demo token gets everything (showroom mode)."""
+    # Every flag the portal UI gates on must be listed here: a key missing
+    # from this payload reads as OFF in the browser, so the feature exists
+    # server-side and is invisible to the client.
     keys = ["listing_photos", "visit_scheduler_live", "offer_checklist",
-            "portal_pwa", "real_map", "co_buyer", "mortgage_handoff"]
+            "portal_pwa", "real_map", "co_buyer", "mortgage_handoff",
+            "client_documents"]
     if token == "demo":
         flags = {k: True for k in keys}
         photos: dict = {}
@@ -1070,6 +1701,17 @@ class KVIn(BaseModel):
     value: str
 
 
+@router.get("/vitrine/criteria-schema/{token}")
+def kv_criteria_schema(token: str, lang: str = "fr",
+                       db: Session = Depends(get_db)):
+    """Portal-side copy of the search vocabulary (client audience), so the
+    Vitrine's « Mes alertes » form and the broker's curated search offer the
+    same choices instead of drifting apart."""
+    from . import criteria_schema
+    _contact_by_token(db, token)
+    return criteria_schema.schema(lang, audience="client")
+
+
 @router.get("/vitrine/storage/{token}/{key}")
 def kv_get(token: str, key: str, db: Session = Depends(get_db)):
     c = _contact_by_token(db, token)
@@ -1080,8 +1722,26 @@ def kv_get(token: str, key: str, db: Session = Depends(get_db)):
     return {"key": key, "value": row.value}
 
 
+def _sweep_criteria_async(tenant_id: str, contact_id: int) -> None:
+    """The client just saved their criteria — match now instead of making
+    them wait for the cron. Runs after the response, on its own session, and
+    never raises into the portal request."""
+    from .connectors import criteria
+    from .models import SessionLocal
+    db = SessionLocal()
+    try:
+        c = db.get(Contact, contact_id)
+        if c:
+            criteria.match_criteria(db, tenant_id, contact=c)
+    except Exception:  # noqa: BLE001 — a portal save must never fail on this
+        pass
+    finally:
+        db.close()
+
+
 @router.put("/vitrine/storage/{token}/{key}")
-def kv_put(token: str, key: str, body: KVIn, db: Session = Depends(get_db)):
+def kv_put(token: str, key: str, body: KVIn, background: BackgroundTasks,
+           db: Session = Depends(get_db)):
     c = _contact_by_token(db, token)
     row = (db.query(PortalKV)
            .filter_by(tenant_id=c.tenant_id, token=token, key=key).first())
@@ -1091,6 +1751,8 @@ def kv_put(token: str, key: str, body: KVIn, db: Session = Depends(get_db)):
         db.add(PortalKV(tenant_id=c.tenant_id, token=token, key=key,
                         value=body.value))
     db.commit()
+    if key == "vitrine2_prefs":
+        background.add_task(_sweep_criteria_async, c.tenant_id, c.id)
     return {"key": key, "ok": True}
 
 
@@ -1114,7 +1776,299 @@ def vitrine_listings(token: str, db: Session = Depends(get_db)):
     return [{"centris_no": r.centris_no, "address": r.address, "area": r.area,
              "price": r.price, "beds": r.beds, "baths": r.baths,
              "prop_type": r.prop_type, "url": r.url,
+             # enrichment (PDF / DDF / summary sweep): year, taxes, rooms →
+             # 3D plan, remarks, inclusions, agency, date_sent…
+             "details": r.details or {},
              "received_at": r.received_at.isoformat()} for r in rows]
+
+
+# --------------------------------------------- client vault: docs & notes --
+# Two-way, so both sides read and write the same shelf: the client uploads
+# their pre-approval from the portal, the broker answers in the ops console,
+# and the exchange never leaves the measured surface (no email attachments,
+# no lost thread). Portal side is token-gated, broker side is key-gated.
+DOC_MIMES = {
+    "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "png": "image/png", "heic": "image/heic", "webp": "image/webp",
+    "doc": "application/msword", "txt": "text/plain", "csv": "text/csv",
+    "docx": ("application/vnd.openxmlformats-officedocument"
+             ".wordprocessingml.document"),
+    "xls": "application/vnd.ms-excel",
+    "xlsx": ("application/vnd.openxmlformats-officedocument"
+             ".spreadsheetml.sheet"),
+}
+DOC_MAX_B64 = 11_000_000        # ~8 MB decoded
+DOC_MAX_PER_CLIENT = 60
+
+
+def _doc_out(d: PortalDocument) -> dict:
+    """Metadata only — the bytes travel through the download endpoint."""
+    return {"id": d.id, "name": d.name, "mime": d.mime,
+            "size_bytes": d.size_bytes, "uploaded_by": d.uploaded_by,
+            "note": d.note, "created_at": d.created_at.isoformat()}
+
+
+def _store_document(db: Session, t: str, c: Contact, name: str,
+                    content_b64: str, uploaded_by: str, note: str = "") -> dict:
+    import base64 as _b64
+    name = (name or "document").strip()[:200]
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in DOC_MIMES:
+        raise HTTPException(422, "type de fichier non accepté "
+                                 f"({', '.join(sorted(DOC_MIMES))})")
+    if len(content_b64) > DOC_MAX_B64:
+        raise HTTPException(422, "fichier trop lourd (max ~8 Mo)")
+    try:
+        size = len(_b64.b64decode(content_b64, validate=True))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(422, "contenu base64 invalide")
+    if not size:
+        raise HTTPException(422, "fichier vide")
+    n = (db.query(PortalDocument)
+         .filter_by(tenant_id=t, contact_id=c.id).count())
+    if n >= DOC_MAX_PER_CLIENT:
+        raise HTTPException(422, f"maximum {DOC_MAX_PER_CLIENT} documents par "
+                                 "client — supprimer avant d'ajouter")
+    d = PortalDocument(tenant_id=t, contact_id=c.id, name=name,
+                       mime=DOC_MIMES[ext], size_bytes=size,
+                       content=content_b64, uploaded_by=uploaded_by,
+                       note=(note or "")[:300])
+    db.add(d)
+    db.commit()
+    if uploaded_by == "client":
+        # A client sending a document is a real engagement signal; a broker
+        # filing one is housekeeping (actor=realtor scores nothing).
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="document.uploaded",
+                     actor="client", origin="vitrine",
+                     payload={"name": d.name, "size": size},
+                     idempotency_key=f"doc-{d.id}")
+        from .automations import notify
+        notify(db, t, "document", f"{c.name} a déposé « {d.name} » au portail",
+               contact_id=c.id)
+    else:
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="document.uploaded",
+                     actor="realtor", origin="hub",
+                     payload={"name": d.name, "size": size},
+                     idempotency_key=f"doc-{d.id}", reproject=False)
+    return _doc_out(d)
+
+
+def _document_download(db: Session, t: str, contact_id: int, doc_id: int
+                       ) -> Response:
+    import base64 as _b64
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != t or d.contact_id != contact_id:
+        raise HTTPException(404, "document introuvable")
+    safe = d.name.replace('"', "").replace("\\", "")
+    return Response(content=_b64.b64decode(d.content), media_type=d.mime,
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{safe}"',
+                             "Cache-Control": "private, max-age=300"})
+
+
+def _post_note(db: Session, t: str, c: Contact, body: str, author: str) -> dict:
+    body = (body or "").strip()[:4000]
+    if not body:
+        raise HTTPException(422, "note vide")
+    n = PortalNote(tenant_id=t, contact_id=c.id, author=author, body=body)
+    db.add(n)
+    db.commit()
+    if author == "client":
+        ingest_event(db, tenant_id=t, contact_id=c.id, etype="message.sent",
+                     actor="client", origin="vitrine",
+                     payload={"kind": "portal_note"},
+                     idempotency_key=f"pnote-{n.id}")
+        from .automations import notify
+        notify(db, t, "message", f"Note de {c.name} au portail",
+               body=body[:200], contact_id=c.id)
+    return {"id": n.id, "author": n.author, "body": n.body, "read": n.read,
+            "created_at": n.created_at.isoformat()}
+
+
+class DocIn(BaseModel):
+    name: str
+    content_b64: str
+    note: str = ""
+
+
+class NoteIn(BaseModel):
+    body: str
+
+
+@router.get("/vitrine/vault/{token}")
+def vault_get(token: str, db: Session = Depends(get_db)):
+    """Everything on the client's shelf: documents (metadata) + the note
+    thread. One call so the portal tab opens in a single round trip."""
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        return {"enabled": False, "documents": [], "notes": []}
+    docs = (db.query(PortalDocument)
+            .filter_by(tenant_id=c.tenant_id, contact_id=c.id)
+            .order_by(PortalDocument.created_at.desc()).limit(60).all())
+    notes = (db.query(PortalNote)
+             .filter_by(tenant_id=c.tenant_id, contact_id=c.id)
+             .order_by(PortalNote.created_at.asc()).limit(200).all())
+    # The client is reading: the broker's notes are now seen.
+    for n in notes:
+        if n.author == "broker" and not n.read:
+            n.read = True
+    db.commit()
+    return {"enabled": True,
+            "documents": [_doc_out(d) for d in docs],
+            "notes": [{"id": n.id, "author": n.author, "body": n.body,
+                       "created_at": n.created_at.isoformat()} for n in notes]}
+
+
+@router.post("/vitrine/vault/{token}/documents")
+def vault_upload(token: str, body: DocIn, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        raise HTTPException(403, "coffre à documents désactivé")
+    return _store_document(db, c.tenant_id, c, body.name, body.content_b64,
+                           "client", body.note)
+
+
+@router.get("/vitrine/vault/{token}/documents/{doc_id}")
+def vault_download(token: str, doc_id: int, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    return _document_download(db, c.tenant_id, c.id, doc_id)
+
+
+@router.delete("/vitrine/vault/{token}/documents/{doc_id}")
+def vault_delete(token: str, doc_id: int, db: Session = Depends(get_db)):
+    """A client may withdraw what they uploaded — never what the broker
+    filed (that is the broker's record of the file)."""
+    c = _contact_by_token(db, token)
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != c.tenant_id or d.contact_id != c.id:
+        raise HTTPException(404, "document introuvable")
+    if d.uploaded_by != "client":
+        raise HTTPException(403, "document déposé par le courtier")
+    db.delete(d)
+    db.commit()
+    return {"id": doc_id, "deleted": True}
+
+
+@router.post("/vitrine/vault/{token}/notes")
+def vault_note(token: str, body: NoteIn, db: Session = Depends(get_db)):
+    c = _contact_by_token(db, token)
+    if not features.enabled("client_documents"):
+        raise HTTPException(403, "coffre à documents désactivé")
+    return _post_note(db, c.tenant_id, c, body.body, "client")
+
+
+@router.get("/clients/{contact_id}/vault", dependencies=[Depends(auth)])
+def broker_vault(contact_id: int, db: Session = Depends(get_db),
+                 t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    docs = (db.query(PortalDocument).filter_by(tenant_id=t, contact_id=c.id)
+            .order_by(PortalDocument.created_at.desc()).limit(60).all())
+    notes = (db.query(PortalNote).filter_by(tenant_id=t, contact_id=c.id)
+             .order_by(PortalNote.created_at.asc()).limit(200).all())
+    unread = sum(1 for n in notes if n.author == "client" and not n.read)
+    for n in notes:
+        if n.author == "client" and not n.read:
+            n.read = True
+    db.commit()
+    return {"contact_id": c.id, "unread_before": unread,
+            "documents": [_doc_out(d) for d in docs],
+            "notes": [{"id": n.id, "author": n.author, "body": n.body,
+                       "created_at": n.created_at.isoformat()} for n in notes]}
+
+
+@router.post("/clients/{contact_id}/vault/documents",
+             dependencies=[Depends(auth)])
+def broker_vault_upload(contact_id: int, body: DocIn,
+                        db: Session = Depends(get_db),
+                        t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return _store_document(db, t, c, body.name, body.content_b64, "broker",
+                           body.note)
+
+
+@router.get("/clients/{contact_id}/vault/documents/{doc_id}",
+            dependencies=[Depends(auth)])
+def broker_vault_download(contact_id: int, doc_id: int,
+                          db: Session = Depends(get_db),
+                          t: str = Depends(tenant)):
+    return _document_download(db, t, contact_id, doc_id)
+
+
+@router.delete("/clients/{contact_id}/vault/documents/{doc_id}",
+               dependencies=[Depends(auth)])
+def broker_vault_delete(contact_id: int, doc_id: int,
+                        db: Session = Depends(get_db),
+                        t: str = Depends(tenant)):
+    d = db.get(PortalDocument, doc_id)
+    if not d or d.tenant_id != t or d.contact_id != contact_id:
+        raise HTTPException(404, "document introuvable")
+    db.delete(d)
+    db.commit()
+    return {"id": doc_id, "deleted": True}
+
+
+@router.post("/clients/{contact_id}/vault/notes", dependencies=[Depends(auth)])
+def broker_vault_note(contact_id: int, body: NoteIn,
+                      db: Session = Depends(get_db), t: str = Depends(tenant)):
+    c = db.get(Contact, contact_id)
+    if not c or c.tenant_id != t:
+        raise HTTPException(404, "contact introuvable")
+    return _post_note(db, t, c, body.body, "broker")
+
+
+class PortalVisitsIn(BaseModel):
+    """Visitors read off the broker's own Matrix dashboard (« Recent Portal
+    Visitors ») by the internal watcher. Names are matched to contacts;
+    matches feed the engagement timeline + the news feed."""
+    visits: list[dict]      # [{"name": "...", "date": "2026-08-14"?}]
+
+
+@router.post("/connectors/matrix/portal-visits", dependencies=[Depends(auth)])
+def matrix_portal_visits(body: PortalVisitsIn, db: Session = Depends(get_db),
+                         t: str = Depends(tenant)):
+    """Record Matrix-side portal visits: one portal.session_started event per
+    contact per day (idempotent) + a news row « <date> — <contact> a visité
+    le portail ». Unmatched names are returned, never guessed."""
+    from datetime import date as _date
+    matched, unmatched, created = [], [], 0
+    contacts = db.query(Contact).filter_by(tenant_id=t).all()
+    by_name = { (c.name or "").strip().lower(): c for c in contacts }
+    for v in body.visits[:100]:
+        name = str(v.get("name", "")).strip()
+        if not name:
+            continue
+        c = by_name.get(name.lower())
+        if not c:   # tolerant second pass: unaccented, loose containment
+            import unicodedata
+            def _fold(s):
+                return unicodedata.normalize("NFD", s.lower()) \
+                    .encode("ascii", "ignore").decode()
+            c = next((x for k, x in by_name.items()
+                      if k and (_fold(k) == _fold(name)
+                                or _fold(name) in _fold(k))), None)
+        if not c:
+            unmatched.append(name[:80])
+            continue
+        day = str(v.get("date") or _date.today().isoformat())[:10]
+        _, new = ingest_event(
+            db, tenant_id=t, contact_id=c.id, etype="portal.session_started",
+            actor="client", origin="matrix",
+            payload={"source": "matrix_portal", "date": day},
+            idempotency_key=f"mxpv-{c.id}-{day}")
+        if new:
+            created += 1
+            db.add(NotificationItem(
+                tenant_id=t, contact_id=c.id, kind="visit",
+                title=f"{day} — {c.name} a visité le portail",
+                body="Vu sur le tableau Matrix (Recent Portal Visitors)"))
+            db.commit()
+        matched.append({"name": c.name, "date": day, "new": new})
+    return {"matched": matched, "unmatched": unmatched,
+            "events_new": created}
 
 
 class NoteMarkIn(BaseModel):
@@ -1616,8 +2570,11 @@ def farming_report(body: FarmIn, db: Session = Depends(get_db),
 def messaging_status(db: Session = Depends(get_db), t: str = Depends(tenant)):
     _require("messaging_sync")
     q = db.query(OutboundMessage).filter_by(tenant_id=t)
-    return {"provider_configured": bool(settings.TWILIO_SID),
-            "provider": "twilio" if settings.TWILIO_SID else "aucun (mode simulation)",
+    ghl_sms = bool(settings.GHL_API_KEY and settings.GHL_LOCATION_ID)
+    return {"provider_configured": bool(settings.TWILIO_SID or ghl_sms),
+            "provider": ("twilio" if settings.TWILIO_SID
+                         else "gohighlevel (LC Phone — SMS seulement)"
+                         if ghl_sms else "aucun (mode simulation)"),
             "queued": q.filter_by(status="pending").count(),
             "simulated": q.filter_by(status="simulated").count(),
             "sent": q.filter_by(status="sent").count()}
@@ -1727,7 +2684,8 @@ def consents_export(db: Session = Depends(get_db), t: str = Depends(tenant)):
 # --------------------------------------------------------------- analytics --
 FUNNEL_LABELS_FR = {"fub_import": "CRM FUB", "matrix_visit": "Alertes Matrix",
                     "danny_channel": "Références", "own_generated": "Site web",
-                    "prospecting_agent": "Prospection"}
+                    "prospecting_agent": "Prospection",
+                    "ghl_import": "CRM GoHighLevel"}
 
 
 def _analytics_stats(db: Session, t: str) -> dict:

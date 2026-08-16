@@ -94,9 +94,16 @@ sed -i.bak "s/REPLACE_WITH_CLIENT_INTAKE_EMAIL/<paste-her-address>/" samples/mat
 | `RADAR_API_KEY` | Locks the hub API (`X-Radar-Key`) | `openssl rand -hex 24` |
 | `ANTHROPIC_API_KEY` | Vitrine concierge + forecast web-search, Haiku parser fallback, report narrative, outreach/content drafting | console.anthropic.com → API Keys |
 | `FUB_API_KEY` | Follow Up Boss import + note writeback | FUB → Admin → API → Create key |
+| `GHL_API_KEY`, `GHL_LOCATION_ID` | GoHighLevel import + note writeback (same contract as FUB) — **and the SMS transport when Twilio is unset**: outbound SMS ride GHL's LC Phone (Twilio resold inside the subscription, Canadian numbers available without a Twilio account; threads land in the GHL inbox too). Voice calls stay Twilio-only. | GHL sub-account → Settings → **Private Integrations** → token with *View/Edit Contacts* + *Conversations/Messages* scopes; location id = sub-account id (Settings → Business Profile). For SMS: buy a number under Settings → **Phone Numbers** |
+| `DDF_CLIENT_ID/SECRET` | **Licensed** listing enrichment by MLS number (facts + photos, auto-applied to every alert listing) | The broker applies for a CREA **DDF®** feed (crea.ca → DDF® → National Shared Pool, destination "member tool") — CREA issues OAuth2 client credentials. Sweep: `POST /api/connectors/ddf/enrich` (schedule it, §7) |
+| `SOURCEIMMO_ACCOUNT_ID/API_KEY` | **Certified Centris distributor** enrichment (Centris-native facts + photos; composes with DDF® — already-enriched rows skipped) | The broker signs the Centris data-distribution authorization through source.immo (ID-3 Technologies); they issue the account id + API key. Sweep: `POST /api/connectors/sourceimmo/enrich` (schedule it, §7) |
 | `MATRIX_IMAP_HOST/USER/PASS` | Hub's IMAP poll of the alerts inbox | Gmail: enable 2FA → Security → **App passwords** → Mail. Host `imap.gmail.com` |
 | `INTAKE_EMAIL_MODE/USER/DOMAIN` | Shape of per-client intake addresses | `plus` + the same Gmail user (default) — or `alias` + a catch-all domain |
 | `VITRINE_WEBHOOK_SECRET` | HMAC on portal webhooks | `openssl rand -hex 24` (same-origin deploys work without it; set it anyway) |
+| `TWILIO_SID/TOKEN/FROM` | Real SMS + AI voice-agent calls (unset = everything queues "simulated") | twilio.com → Console → Account SID / Auth token; buy a local (514/438) number |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | The broker's **cloned voice** on AI calls (unset = Twilio `<Say>` fr-CA/en-CA) | elevenlabs.io → Profile → API key; clone the voice (~1 min of clean audio) → copy its Voice ID |
+| `SMTP_HOST/PORT/USER/PASS/FROM` | Outbound email (tracked alert mirror, seller outreach) | Gmail App password works (same technique as IMAP) |
+| `RADAR_PUBLIC_URL` | Public origin used in tracked links `/l/…`, qualification form `/q/…`, feedback survey `/fb/…`, and TwiML audio URLs | `https://<app>.fly.dev` (or your custom domain) |
 | `DB_PATH` | Radar Acheteur sqlite **[Marketable]** | a path on the persistent volume |
 | `IMAP_HOST/USER/PASS`, `ALERT_SENDERS` | Acheteur module's own inbox settings **[Marketable]** | same Gmail app-password technique |
 | `RADAR_TENANT_ID` | Instance identity (white-label = new value) | choose per deployment |
@@ -134,6 +141,101 @@ activity summaries as person notes. Schedule both (§7).
 5. Pull cycle: `POST /api/connectors/matrix/poll` (schedule it, §7), or test
    any single email with `scripts/ingest_email.sh`.
 
+**Link-only boards (no listings in the email body).** Some Matrix boards send
+alerts that contain only a "View All Listings" portal link — nothing to parse.
+The compliant workaround is built in: in Matrix, open the auto-email results →
+select **All** → **Print/Email PDF** with a detailed grid format (e.g.
+`my:Partial`, `Client Detailed`), then either
+- **Email the PDF to the client's intake address** — the IMAP poll parses the
+  attachment automatically when the body has no cards, or
+- **drop it in `/ops`** (client drawer → "Import PDF Matrix"), or
+- `POST /api/connectors/matrix/ingest-pdf` (`contact_id` + `content_b64`).
+**Each format fills what it carries, and the order doesn't matter.** Columns
+are filled one way: an empty field takes the document's value, a field that
+already holds something keeps it. So a row created as a bare identifier (the
+portal watcher, a numbers-only print) is *completed* by a grid PDF dropped
+later — the grid's address, price, beds and baths land on the existing row
+instead of being discarded as a duplicate (`listings_filled` in the response
+counts them). A detailed sheet fills both `details` (year, taxes, rooms,
+remarks) **and** the card columns it states (`fields_filled`). Nothing you
+corrected by hand is ever overwritten, and re-dropping the same PDF is safe.
+
+*If a client's cards show « Prix à confirmer » from an earlier import: drop
+the grid PDF again — the prices will land this time.*
+
+Detail sheets are read conservatively for price: only a **labeled** price
+(Asking Price / Prix demandé / …) is taken. Those sheets also carry municipal
+assessments and tax figures in dollars, and guessing "the first $ amount"
+would turn an evaluation into an asking price — « Prix à confirmer » is the
+honest answer, and the grid PDF or DDF® supplies the real number.
+
+Rows are deduped per client and announced to the client exactly like
+email-parsed cards (§5.2.1). Four human clicks in Matrix, zero automation of
+Centris. (`RADAR_EDITION=internal` additionally unlocks the fenced RPA
+scaffold in `internal/` — broker's own account, personal testing only,
+dry-run default.)
+
+#### 5.2.1 Telling the client — email + SMS, both editions
+Whenever listings land for a client, the hub notifies them **at their real
+email address and phone number** (never the internal intake address):
+
+| | |
+|---|---|
+| **Email** (`alert_mailer`) | The hub's own mirror of the alert, every link tracked: click → `email.link_clicked` → the portal opens on that listing. Centris' own email links can't be instrumented, so this mirror IS the measurement. Needs `SMTP_*` (§5.6). |
+| **SMS** (`alert_sms`) | Short text — "3 new listings are waiting in your portal: <link>". No property facts, just the pull back into the Vitrine. Needs Twilio or GHL LC Phone, and a CASL consent record when `consent_vault` is on. Templates: `listing_sms_fr` / `listing_sms_en` in `features.toml`. |
+
+The point of both is the same: browsing happens **inside the Vitrine**, where
+it is measured, instead of inside a Centris email where it is invisible. That
+is what keeps the engagement score honest.
+
+Each listing row carries an `announced_at` stamp, so a client is told **once**
+per listing no matter how many times an ingest runs:
+- **Marketable** — the realtor drops the results PDF → rows created → client
+  notified in the same request. The `/ops` toast reports the email and SMS
+  status.
+- **Internal** — the watcher posts identifiers with `announce=false`, then the
+  Summary-view facts with `announce=true`: the client receives **one** email,
+  and it carries real addresses and prices instead of bare Centris numbers.
+  `portal_link_watcher.py --details --apply` does this ordering for you and
+  prints `avis client: N inscription(s) — courriel … · texto …`.
+
+**Proofing the template.** `/ops` → client drawer → **"ALERT EMAIL —
+preview and test"**: *Preview* opens the real template in a new tab, *Send a
+test* delivers one real copy (leave the field empty for the client's own
+address, or type yours). Same by API:
+```bash
+# render it — nothing sent, nothing recorded
+curl -s -H "X-Radar-Key: $KEY" "$APP/api/alert-mail/preview?contact_id=15" > mail.html
+# send one real copy to yourself
+curl -s -X POST -H "X-Radar-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"contact_id":15,"to":"you@example.com"}' $APP/api/alert-mail/test
+```
+Both use the client's own listings (sample cards when their book is empty) and
+neither stamps `announced_at` nor writes an event — so rehearsing costs no
+real announcement. `"status":"simulated"` means `SMTP_*` is not configured and
+nothing left the server; `"sent"` means it went through. Clicking a link in
+the test email does log `email.link_clicked` for that client — that click is
+the measurement mechanism.
+
+To suppress notification on an ingest (backfills, corrections), post with
+`"announce": false` — the rows stay unannounced until something announces
+them. Listings that predate this feature were stamped as already-announced by
+the migration, so upgrading never re-alerts your archive.
+
+#### 5.2.2 Client file — documents & notes (`client_documents`)
+The portal carries the document exchange, so a pre-approval or a promise to
+purchase never travels as an email attachment:
+- Client side: portal tab **« Mon dossier » / "My file"** — upload documents
+  (PDF, images, Word, Excel; 8 MB each, 60 per client), withdraw their own
+  uploads, and write notes to the broker.
+- Broker side: `/ops` → client drawer → **« Dossier client »** — read and
+  download what the client sent, file documents back, answer the thread.
+- A client upload raises `document.uploaded` and a portal note raises
+  `message.sent` (both `actor=client`), so the exchange feeds the engagement
+  score; broker actions are recorded but never scored.
+- Endpoints: `GET/POST/DELETE /api/vitrine/vault/{token}[/documents|/notes]`
+  (token-gated) and `/api/clients/{id}/vault[…]` (key-gated).
+
 ### 5.3 Vitrine webhook secret
 Set `VITRINE_WEBHOOK_SECRET` on the server. The bundled portal is same-origin
 so nothing else to configure; if you ever host the portal separately, sign
@@ -150,7 +252,29 @@ Set `DB_PATH` + the module's `IMAP_*`/`ALERT_SENDERS`. Its pipeline fills its
 own DB; the intelligence UI lives at `/acheteur`. Mirror its signals into the
 unified timeline with `POST /api/connectors/acheteur/sync` (schedule it, §7).
 
-### 5.6 RPA suite **[Internal]** — Danny's account only
+### 5.6 AI voice agents + receptionist (Twilio / ElevenLabs)
+1. Set `TWILIO_SID/TOKEN/FROM`. Without them everything still works in
+   **simulated** mode: queued messages/calls appear in `/ops` → 🤖 Agents →
+   📞 with a tap-to-send fallback — perfect for testing.
+2. For the broker's cloned voice, set `ELEVENLABS_API_KEY` +
+   `ELEVENLABS_VOICE_ID`; TwiML then `<Play>`s hub-synthesized audio from
+   `/api/voice/audio/{id}.mp3` (requires a public `RADAR_PUBLIC_URL`).
+3. **Receptionist**: in the Twilio console, point your number's
+   "a call comes in / missed-call" webhook at
+   `https://<app>/api/webhooks/voice-inbound?format=twiml` — callers get the
+   bilingual greeting (FR québécois then EN), voicemail is transcribed back,
+   the apology SMS goes out, and a callback task lands in `/ops`.
+4. Thresholds, scripts, and greetings live in `features.toml [settings]`
+   (`voice_*`, `receptionist_*`, `broker_name`).
+
+### 5.7 Seller Intelligence
+Works out of the box with the demo provider (`/ops` → 🤖 Agents → 🏠).
+Real data = wire the `RegistreProvider` slot (Registre foncier / JLR).
+Compliance gates are enforced in code: letters/call scripts always allowed,
+email/SMS need a recorded CASL basis, automated voice needs **express**
+consent (CRTC ADAD).
+
+### 5.8 RPA suite **[Internal]** — Danny's account only
 ```bash
 pip install -r internal/matrix-centris-rpa/requirements.txt
 playwright install chromium
@@ -164,6 +288,13 @@ playwright install chromium
    add `--apply` only after selectors are filled and a manual spot-check.
 4. Keep runs low-frequency and human-paced (built in). Never containerize or
    distribute this folder — `.dockerignore` already fences it.
+5. **Complete email ingestion (link-only boards)**: the hub queues every
+   empty auto-email's portal link (`GET /api/connectors/matrix/link-queue`);
+   `portal_link_watcher.py` opens each link (anonymous session, no login
+   ever automated), lifts the Centris numbers from the rendered page and
+   posts them back — enrichment then comes from DDF®/detailed PDFs, or from
+   `--details` (Summary view). The client is notified last, once the facts
+   are in place (§5.2.1). Dry-run by default; see the folder README.
 
 ## 6 · Deploying (Fly.io, YUL)
 
@@ -174,9 +305,16 @@ fly launch --copy-config --no-deploy        # keeps the shipped fly.toml
 fly volumes create radar_data --size 1 --region yul
 fly secrets set \
   RADAR_API_KEY=… ANTHROPIC_API_KEY=… FUB_API_KEY=… \
+  GHL_API_KEY=… GHL_LOCATION_ID=… \
   MATRIX_IMAP_HOST=imap.gmail.com MATRIX_IMAP_USER=… MATRIX_IMAP_PASS=… \
-  INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  INTAKE_EMAIL_MODE=plus INTAKE_EMAIL_USER=… VITRINE_WEBHOOK_SECRET=… \
+  TWILIO_SID=… TWILIO_TOKEN=… TWILIO_FROM=… \
+  ELEVENLABS_API_KEY=… ELEVENLABS_VOICE_ID=… \
+  SMTP_HOST=smtp.gmail.com SMTP_PORT=587 SMTP_USER=… SMTP_PASS=… SMTP_FROM=… \
+  RADAR_TOKEN_SECRET="$(openssl rand -hex 24)" RADAR_CORS_ORIGINS= \
+  RADAR_PUBLIC_URL=https://<app>.fly.dev \
   IMAP_HOST=imap.gmail.com IMAP_USER=… IMAP_PASS=…        # [Marketable]
+# add DDF_CLIENT_ID/SECRET when the CREA DDF® credentials arrive
 fly deploy
 fly logs            # watch first boot: it seeds the empty volume, then serves
 fly open            # dashboard at /, ops at /ops
@@ -187,10 +325,11 @@ Data lives on the volume (`/data/*.db`) and survives deploys. Update = edit →
 **[Marketable]**: new app name + volume + `RADAR_TENANT_ID` secret — nothing
 else changes (decision #3).
 
-**Going to production (no demo data)**: before the final deploy, remove
-`python -m radar_hub.seed && ` from the Dockerfile `CMD` (or, after a first
-demo run: `fly ssh console -C "rm /data/radar_hub.db"` then redeploy with the
-cleaned CMD). Then import real leads via FUB (§8).
+**Demo data is now opt-in**: the image boots CLEAN by default (tables
+created, zero contacts). To run a demo instance, `fly secrets set
+RADAR_SEED_DEMO=1` (idempotent seed on each boot). If you seeded by mistake:
+`fly ssh console -C "rm /data/radar_hub.db"`, unset the secret, redeploy.
+Then import real leads via FUB/GHL (§8).
 
 ## 7 · Scheduled jobs
 
@@ -198,9 +337,15 @@ Any cron (server, GitHub Actions, or a tiny Fly machine) hitting:
 
 ```cron
 */10 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/matrix/poll
-*/15 * * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/flush-writebacks
-0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/fub/import
+0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/crm/sync   # CRM-agnostic: import + writebacks on FUB/GHL/…
+0 */4 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/ddf/enrich  # licensed DDF® enrichment (when configured)
+30 */4 * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/criteria/match  # criteria sweep (licensed feed when configured) → fills client Vitrines from their saved prefs
+15 */4 * * *  curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/sourceimmo/enrich  # certified Centris distributor (when configured)
 0 */6 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/connectors/acheteur/sync   # [Marketable]
+0 9 * * *     curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/deadlines/run       # deadline_sentinel
+0 10 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/feedback/run        # visit_feedback
+0 11 * * *    curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/checkins/run  # ai_client_checkin
+0 */2 * * *   curl -s -X POST -H "X-Radar-Key: $KEY" https://<app>.fly.dev/api/agents/voice/outreach/run  # ai_voice_outreach
 ```
 
 **[Internal]** the RPA writer runs from Danny's machine on demand or a gentle

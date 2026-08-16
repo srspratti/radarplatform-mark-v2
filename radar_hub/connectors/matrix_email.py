@@ -285,17 +285,45 @@ def contact_by_recipient(db: Session, tenant_id: str, raw: str) -> Contact | Non
                     Contact.intake_email.in_(addresses)).first())
 
 
+# Columns a card can fill. Filling is one-way: an empty column takes the
+# card's value, a column that already holds something keeps it. So whichever
+# document arrives second completes the row instead of overwriting it, and
+# nothing a human already corrected is ever clobbered.
+CARD_COLUMNS = ("address", "area", "price", "beds", "baths", "prop_type", "url")
+
+
+def fill_listing(row, card: dict) -> list[str]:
+    """Backfill the row's empty columns from a card. Returns what it filled."""
+    filled = []
+    for key in CARD_COLUMNS:
+        val = card.get(key)
+        if not val or getattr(row, key, None):
+            continue
+        setattr(row, key, int(val) if key in ("price", "beds", "baths")
+                else str(val)[:290])
+        filled.append(key)
+    return filled
+
+
 def store_listings(db: Session, tenant_id: str, contact: Contact,
                    cards: list[dict], raw_id: str = "") -> dict:
     from ..models import Listing
-    new = dup = 0
+    new = dup = updated = 0
     new_cards: list[dict] = []
     for card in cards:
         exists = (db.query(Listing)
                   .filter_by(tenant_id=tenant_id, contact_id=contact.id,
                              centris_no=card["centris_no"]).first())
         if exists:
+            # The row is known — but it may be a bare identifier posted by the
+            # portal watcher or a numbers-only print, in which case THIS grid
+            # carries the address and price it lacks. Counting it as a
+            # duplicate and walking away is how a listing ends up showing
+            # « Prix à confirmer » forever.
             dup += 1
+            if fill_listing(exists, card):
+                db.commit()
+                updated += 1
             continue
         db.add(Listing(tenant_id=tenant_id, contact_id=contact.id, **card))
         db.commit()
@@ -308,29 +336,121 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
                               "address": card["address"], "match": True},
                      reproject=False,
                      idempotency_key=f"mx-listing-{contact.id}-{card['centris_no']}")
-    alert_status = "skipped"
+    alert_status, sms_status = "skipped", "skipped"
+    ann: dict = {"announced": 0}
     if new_cards:
+        # Licensed DDF® feed configured → enrich the new rows BEFORE telling
+        # the client (facts + photos by MLS number), so the alert carries the
+        # real address and price instead of a bare identifier. Best-effort:
+        # the alert pipeline must never fail because the feed hiccuped.
+        if settings.DDF_CLIENT_ID:
+            from . import ddf
+            from ..models import Listing
+            client = ddf.DDFClient()
+            for card in new_cards:
+                row = (db.query(Listing)
+                       .filter_by(tenant_id=tenant_id, contact_id=contact.id,
+                                  centris_no=card["centris_no"]).first())
+                if row:
+                    try:
+                        ddf.enrich_listing(db, tenant_id, row, client)
+                    except Exception:  # noqa: BLE001
+                        pass
         # Mirror the alert as OUR tracked-link email — Centris' own email links
         # can't be instrumented (we don't control their HTML); this is the
-        # click-capture mechanism (alert_mailer).
-        from ..automations import send_listing_alert_email
-        alert_status = send_listing_alert_email(db, tenant_id, contact,
-                                                new_cards, raw_id)
+        # click-capture mechanism (alert_mailer) — plus the SMS nudge.
+        from ..automations import announce_new_listings
+        ann = announce_new_listings(db, tenant_id, contact, raw_id)
+        alert_status, sms_status = ann["email"], ann["sms"]
     return {"listings_new": new, "listings_dup": dup,
-            "alert_email": alert_status}
+            "listings_filled": updated,
+            "alert_email": alert_status, "alert_sms": sms_status,
+            "announced": ann}
+
+
+_RX_PORTAL_URL = re.compile(
+    r"https?://[^\s\"'<>\]]*(?:matrix\.centris\.ca|/Matrix/Public/Portal\.aspx)"
+    r"[^\s\"'<>\]]*", re.I)
+
+
+def _queue_portal_link(db: Session, tenant_id: str, contact: Contact,
+                       raw: str) -> bool:
+    """Remember the auto-email's portal URL in the link queue (passive
+    metadata — the hub NEVER fetches it). Skips if an identical link is
+    already pending for this client; a fresh email after completion
+    re-queues, since the same URL carries the new listings."""
+    from ..models import MatrixLinkTask
+    # The footer's unsubscribe link lives on the same host
+    # (…/UnsubscribeDirectEmail.aspx) and can appear FIRST in the raw source,
+    # so: drop unsubscribe URLs, then prefer the actual portal page
+    # (Portal.aspx — the « View All Listings » target) over anything else.
+    urls = [u.rstrip(".,)>").replace("&amp;", "&")
+            for u in _RX_PORTAL_URL.findall(raw)
+            if "unsubscribe" not in u.lower()]
+    preferred = [u for u in urls if "portal.aspx" in u.lower()]
+    if not (preferred or urls):
+        return False
+    url = (preferred or urls)[0][:500]
+    if (db.query(MatrixLinkTask)
+            .filter_by(tenant_id=tenant_id, contact_id=contact.id,
+                       url=url, status="pending").first()):
+        return False
+    db.add(MatrixLinkTask(tenant_id=tenant_id, contact_id=contact.id,
+                          url=url))
+    db.commit()
+    return True
 
 
 def process_raw_email(db: Session, tenant_id: str, raw: str,
-                      raw_id: str = "") -> dict:
+                      raw_id: str = "",
+                      pdf_attachments: list[bytes] | None = None) -> dict:
     """Full pipeline for one Matrix email:
     1. route by per-client intake address (To/Cc) — strongest signal
     2. extract listing cards → client's Vitrine inventory
     3. run the kind parser (visit / alert-created / match) for events
+    Link-only boards: when the body has no cards but the email carries a PDF
+    (Matrix "Email PDF" of the results grid), the PDF is parsed instead.
     """
     contact = contact_by_recipient(db, tenant_id, raw)
     cards = parse_listing_cards(raw)
+    pdf_rows = 0
+    if not cards and pdf_attachments:
+        from .matrix_pdf import parse_matrix_pdf
+        for blob in pdf_attachments:
+            try:
+                cards.extend(parse_matrix_pdf(blob))
+            except ValueError:
+                continue
+        pdf_rows = len(cards)
+    if not cards and contact:
+        # Matrix « Email PDF » sends a LINK to the PDF, not an attachment.
+        # Opt-in (matrix_pdf_link_fetch in features.toml): fetch the linked
+        # document once, as the email's intended recipient would.
+        from .. import features
+        if features.setting("matrix_pdf_link_fetch", False):
+            from .matrix_pdf import fetch_pdf_link, parse_matrix_pdf
+            urls = [u.rstrip(".,)>") for u in
+                    re.findall(r"https?://[^\s\"<>\]]+", raw)
+                    if "pdf" in u.lower() or "getmedia" in u.lower()
+                    or "document" in u.lower()]
+            for url in urls[:3]:
+                blob = fetch_pdf_link(url)
+                if blob:
+                    try:
+                        cards.extend(parse_matrix_pdf(blob))
+                    except ValueError:
+                        continue
+            pdf_rows = len(cards)
+    link_queued = False
+    if not cards and contact:
+        # Still nothing? Remember the portal link ("View All Listings") in
+        # the link queue. The hub never opens it — a human does (marketable),
+        # or the internal-edition watcher does (broker's own judgment call).
+        link_queued = _queue_portal_link(db, tenant_id, contact, raw)
     parsed = parse_matrix_email(raw)
     out: dict = {"routed_by_intake": bool(contact),
+                 "pdf_listings": pdf_rows,
+                 "link_queued": link_queued,
                  "parsed": {"kind": parsed.kind,
                             "confidence": parsed.confidence,
                             "name": parsed.name,
@@ -369,30 +489,67 @@ def process_raw_email(db: Session, tenant_id: str, raw: str,
     return out
 
 
+def message_text(msg) -> tuple[str, list[bytes]]:
+    """Readable text + PDF attachments for one MIME message.
+
+    Board templates (CoreLogic) put the « View All Listings » URL only in
+    the text/html part — the text/plain alternative spells out just the
+    unsubscribe link. So hrefs from HTML parts are appended as bare lines:
+    the link queue sees the portal URL, and the line-based parsers are
+    undisturbed."""
+    text, html = "", ""
+    pdfs: list[bytes] = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain":
+                text += part.get_content()
+            elif ct == "text/html":
+                html += part.get_content()
+            elif ct == "application/pdf":
+                blob = part.get_payload(decode=True)
+                if blob:
+                    pdfs.append(blob)
+    elif msg.get_content_type() == "text/html":
+        html = msg.get_content()
+    else:
+        text = msg.get_content()
+    if html:
+        hrefs = re.findall(r"href=['\"]([^'\"]+)['\"]", html, re.I)
+        if hrefs:
+            text += "\n" + "\n".join(hrefs[:50])
+    return text, pdfs
+
+
 def poll_matrix_inbox(db: Session, tenant_id: str) -> dict:
     """IMAP pull of unseen Matrix notifications. Same pattern as Radar Acheteur."""
     if not (settings.MATRIX_IMAP_HOST and settings.MATRIX_IMAP_USER):
         return {"polled": 0, "error": "IMAP non configuré (MATRIX_IMAP_*)"}
-    box = imaplib.IMAP4_SSL(settings.MATRIX_IMAP_HOST)
-    box.login(settings.MATRIX_IMAP_USER, settings.MATRIX_IMAP_PASS)
-    box.select(settings.MATRIX_IMAP_FOLDER)
+    try:
+        box = imaplib.IMAP4_SSL(settings.MATRIX_IMAP_HOST)
+        box.login(settings.MATRIX_IMAP_USER, settings.MATRIX_IMAP_PASS)
+        box.select(settings.MATRIX_IMAP_FOLDER)
+    except imaplib.IMAP4.error as exc:
+        return {"polled": 0, "error":
+                f"Connexion IMAP refusée pour {settings.MATRIX_IMAP_USER}: "
+                f"{exc} — vérifier le MOT DE PASSE D'APPLICATION (16 "
+                "caractères, sans espaces, généré sur CE compte, 2FA activée)"}
+    except OSError as exc:
+        return {"polled": 0,
+                "error": f"Serveur IMAP injoignable "
+                         f"({settings.MATRIX_IMAP_HOST}): {exc}"}
     _, data = box.search(None, "UNSEEN")
     ids = data[0].split()
     results = []
     for mid in ids[:50]:
         _, msg_data = box.fetch(mid, "(RFC822)")
         msg = email.message_from_bytes(msg_data[0][1], policy=email.policy.default)
-        text = ""
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    text += part.get_content()
-        else:
-            text = msg.get_content()
+        text, pdfs = message_text(msg)
         headers = (f"To: {msg.get('To', '')}\nCc: {msg.get('Cc', '')}\n"
                    f"Delivered-To: {msg.get('Delivered-To', '')}\n"
                    f"Subject: {msg.get('Subject', '')}\n")
         results.append(process_raw_email(db, tenant_id, headers + text,
-                                         raw_id=msg.get("Message-ID", str(mid))))
+                                         raw_id=msg.get("Message-ID", str(mid)),
+                                         pdf_attachments=pdfs))
     box.logout()
     return {"polled": len(ids), "results": results}

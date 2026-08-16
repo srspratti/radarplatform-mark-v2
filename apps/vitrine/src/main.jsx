@@ -29,6 +29,9 @@ const TOKEN = (() => {
   return t === "demo" ? "" : t;
 })();
 
+// « Mes alertes » reads the shared criteria vocabulary from the hub with it.
+window.__VITRINE_TOKEN__ = TOKEN;
+
 const LOADED_AT = Date.now();
 const EVENTS_KEY = "vitrine2_events";
 const sent = new Set();
@@ -58,6 +61,9 @@ const MAP = {
 };
 // reaction_pass / theme_change / shop_item / chat_topic / designer_request
 // deliberately stay local — noise or negative signals, not engagement.
+// document_upload / vault_note stay local too, for the opposite reason: the
+// vault endpoints already ingest document.uploaded / message.sent server-side,
+// so mapping them here would score the same act twice.
 
 let ADDR = {};           // centris_no -> address (from live listings fetch)
 const seenSections = new Set();   // throttle section.viewed per session
@@ -193,19 +199,62 @@ function buildMerge(live, photos) {
     return live.map((r, i) => {
       const tpl = demos[i % demos.length];
       const priceRatio = r.price && tpl.price ? r.price / tpl.price : 1;
+      // enrichment from a Client Detailed PDF export (Listing.details)
+      const det = r.details || {};
+      const rooms = det.rooms || [];
+      // Identifier-only rows (numbers lifted from a printed portal page or
+      // the internal watcher) carry no facts yet. Marking them keeps the
+      // card from presenting the demo template's price/rooms/year as if
+      // they described this property — enrichment fills them in later.
+      const stub = !r.price && !r.address && !det.year;
       return {
         ...tpl,
+        stub,
+        // marks a row backed by the hub: the card then shows only fields the
+        // hub supplied, never the template's heating/garage/pool/fireplace
+        live: true,
         photos: (photos && photos[r.centris_no]) || [],
         id: r.centris_no,
         addr: r.address || `Inscription Centris ${r.centris_no}`,
-        area: r.area || tpl.area,
-        price: r.price || tpl.price,
-        evalMun: r.price ? Math.round(r.price * 0.86) : tpl.evalMun,
-        beds: r.beds || tpl.beds,
-        baths: r.baths || tpl.baths,
-        typeFr: r.prop_type || tpl.typeFr,
-        typeEn: r.prop_type || tpl.typeEn,
-        taxesMun: Math.round((tpl.taxesMun || 3000) * priceRatio),
+        area: r.area || "",
+        // Never inherit the template's price: a figure the hub does not have
+        // is the one number a client must not be shown. 0 → "prix à confirmer".
+        price: r.price || 0,
+        evalMun: r.price ? Math.round(r.price * 0.86) : 0,
+        // Same rule as the price: report what the hub actually knows. Zero /
+        // empty means "not known yet" and the card omits the row rather than
+        // borrowing the demo template's figure.
+        beds: r.beds || 0,
+        baths: r.baths || 0,
+        typeFr: r.prop_type || "",
+        typeEn: r.prop_type || "",
+        sqft: det.living_sqft || 0,
+        year: det.year || 0,
+        taxesMun: det.taxes_mun || 0,
+        taxesScol: det.taxes_school || 0,
+        remarks: det.remarks || "",
+        // summary-sweep extras: filters/sorting + microsite sections
+        inclusions: det.inclusions || "",
+        exclusions: det.exclusions || "",
+        addendum: det.addendum || "",
+        agency: det.agency || "",
+        dateSent: det.date_sent || (r.received_at || "").slice(0, 10),
+        styleStr: det.style || "",
+        propertyUse: det.property_use || "",
+        heatingStr: det.heating || "",
+        waterAccess: det.water_access || "",
+        fireplaceStr: det.fireplace || "",
+        parkingStr: det.parking || "",
+        zoning: det.zoning || "",
+        // real room dimensions (ft → m) feed the 3D plan generator
+        ficheRooms: rooms.map((rm) => ({
+          name: rm.name,
+          w: Math.round(rm.w_ft * 0.3048 * 10) / 10,
+          d: Math.round(rm.d_ft * 0.3048 * 10) / 10,
+        })),
+        sqftReal: !!det.living_sqft,
+        yearReal: !!det.year,
+        enriched: !!(det.year || det.living_sqft || rooms.length),
         centrisUrl: r.url || "",
         isLive: true,
       };

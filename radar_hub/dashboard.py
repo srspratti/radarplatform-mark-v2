@@ -93,6 +93,7 @@ const trReport = (s) => { if (LANG==="fr"||!s) return s;
 const SOURCE_META = {
   matrix_visit:      { label:"MATRIX",       cls:"bg-amber-400/15 text-amber-300 border-amber-400/40" },
   fub_import:        { label:"CRM FUB",      cls:"bg-sky-400/15 text-sky-300 border-sky-400/40" },
+  ghl_import:        { label:"CRM GHL",      cls:"bg-cyan-400/15 text-cyan-300 border-cyan-400/40" },
   danny_channel:     { label:"RÉFÉRENCE",    cls:"bg-emerald-400/15 text-emerald-300 border-emerald-400/40" },
   own_generated:     { label:"SITE WEB",     cls:"bg-violet-400/15 text-violet-300 border-violet-400/40" },
   prospecting_agent: { label:"PROSPECTION",  cls:"bg-slate-400/15 text-slate-300 border-slate-400/40" },
@@ -258,6 +259,22 @@ function RadarView({toast, on, feats}) {
             className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("↧ Importer FUB","↧ Import FUB")}</button>
           <button onClick={()=>act(()=>api("/connectors/fub/flush-writebacks",{method:"POST"}),T("Writebacks poussés","Writebacks pushed"))}
             className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">{T("↥ Pousser writebacks","↥ Push writebacks")}</button>
+          <button onClick={async()=>{ try{ const r=await api("/connectors/ghl/import",{method:"POST"});
+              toast(r.error||T(`Import GHL : ${r.imported} importé(s), ${r.skipped} déjà connu(s)`,`GHL import: ${r.imported} imported, ${r.skipped} known`), !!r.error); await load(); }
+              catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-cyan-400">{T("↧ Importer GHL","↧ Import GHL")}</button>
+          <button onClick={async()=>{ try{ const r=await api("/connectors/ghl/flush-writebacks",{method:"POST"});
+              toast(T(`GHL : ${r.sent} note(s) poussée(s), ${r.manual} manuel(s)`,`GHL: ${r.sent} note(s) pushed, ${r.manual} manual`)); }
+              catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-cyan-400">{T("↥ Notes GHL","↥ GHL notes")}</button>
+          <button title={T("Import + writebacks sur chaque CRM configuré (FUB, GHL, …)","Import + writebacks on every configured CRM (FUB, GHL, …)")}
+            onClick={async()=>{ try{ const r=await api("/connectors/crm/sync",{method:"POST"});
+              toast(r.configured.length
+                ? T(`Sync CRM (${r.configured.join(", ")}) : `,`CRM sync (${r.configured.join(", ")}): `)
+                  + Object.entries(r.results).map(([k,v])=>`${k} +${v.import.imported}/↥${v.writebacks.sent}`).join(" · ")
+                : T("Aucun CRM configuré (FUB_API_KEY ou GHL_*)","No CRM configured (FUB_API_KEY or GHL_*)"), !r.configured.length);
+              await load(); }catch(e){ toast(e.message,true);} }}
+            className="mono text-[10px] px-3 py-1.5 rounded bg-[var(--amber)]/90 text-black font-semibold hover:bg-[var(--amber)]">{T("⟳ Sync CRM","⟳ CRM sync")}</button>
         </div>
       </div>
       <div className="mono text-[10px] text-[var(--mute)] mb-3">
@@ -340,10 +357,10 @@ function RadarView({toast, on, feats}) {
 // ---------------------------------------------------------- CONTACTS view --
 const FUNNEL_LABEL = { fub_import:"CRM FUB", matrix_visit:"Alertes Matrix",
   danny_channel:"Références", own_generated:"Site web", prospecting_agent:"Prospection",
-  open_house:"Porte ouverte", seller_intel:"Vendeurs (IA)" };
+  open_house:"Porte ouverte", seller_intel:"Vendeurs (IA)", ghl_import:"CRM GoHighLevel" };
 const FUNNEL_LABEL_EN = { fub_import:"FUB CRM", matrix_visit:"Matrix alerts",
   danny_channel:"Referrals", own_generated:"Website", prospecting_agent:"Prospecting",
-  open_house:"Open house", seller_intel:"Sellers (AI)" };
+  open_house:"Open house", seller_intel:"Sellers (AI)", ghl_import:"GoHighLevel CRM" };
 const chipCls = (on)=>"mono text-[10px] px-2.5 py-1 rounded-full border transition-colors "
   +(on?"border-[var(--amber)] amber bg-[var(--amber)]/10"
       :"border-[var(--line)] text-[var(--mute)] hover:text-[var(--ink)]");
@@ -372,6 +389,330 @@ function ConsentPanel({cid, toast}) {
         <span className="text-[var(--mute)] truncate flex-1">{r.source}{r.note?" — "+r.note:""}</span>
         <span className="text-[var(--mute)] shrink-0">{r.recorded_at.slice(0,10)}</span>
       </div>))}
+  </div>;
+}
+
+function CriteriaField({f, val, set}) {
+  const cls="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] w-full";
+  if (f.kind==="range") { const v=val||{};
+    return <div className="flex gap-1">
+      <input type="number" className={cls} placeholder="min" value={v.min||""}
+        onChange={e=>set({...v, min:+e.target.value||0})}/>
+      <input type="number" className={cls} placeholder="max" value={v.max||""}
+        onChange={e=>set({...v, max:+e.target.value||0})}/>
+    </div>; }
+  if (f.kind==="int") return <input type="number" className={cls} value={val||""}
+      onChange={e=>set(+e.target.value||0)}/>;
+  if (f.kind==="bool") return <input type="checkbox" checked={!!val}
+      onChange={e=>set(e.target.checked)}/>;
+  if (f.kind==="text") return <input className={cls} value={val||""}
+      onChange={e=>set(e.target.value)}/>;
+  if (f.kind==="multi_text") return <input className={cls} placeholder="Rosemont, Villeray…"
+      value={(val||[]).join(", ")}
+      onChange={e=>set(e.target.value.split(",").map(s=>s.trim()).filter(Boolean))}/>;
+  return <select multiple className={cls+" h-16"} value={val||[]}
+    onChange={e=>set([...e.target.selectedOptions].map(o=>o.value))}>
+    {(f.options||[]).map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+  </select>;
+}
+
+// Shared PDF importer: progress while the server parses (a 27-listing album
+// takes real seconds) and a PER-FILE report that stays on screen. The old
+// one-line toast joined every result — including failures — into a single
+// non-error message, so "grid PDF dropped with auto-route selected" looked
+// exactly like success and the listings silently kept no price.
+function PdfImport({cid, multiple, label, hint, toast, onDone}) {
+  const [jobs,setJobs]=useState(null);   // [{name, state, line, err}]
+  const [busy,setBusy]=useState(false);
+  const pct = jobs ? Math.round(100*jobs.filter(j=>j.state!=="wait"&&j.state!=="run").length/jobs.length) : 0;
+  const describe=(r,name)=>{
+    const bits=[];
+    if(r.mode==="detailed"){
+      bits.push(T(`${r.enriched.length} fiche(s) enrichie(s)`,`${r.enriched.length} sheet(s) enriched`));
+      if(r.fields_filled&&r.fields_filled.length) bits.push(T(`champs remplis : ${r.fields_filled.join(", ")}`,`fields filled: ${r.fields_filled.join(", ")}`));
+      if(r.photos_added) bits.push(`${r.photos_added} 📷`);
+      if(r.unmatched&&r.unmatched.length) bits.push(T(`${r.unmatched.length} sans preneur`,`${r.unmatched.length} unmatched`));
+    } else if(r.mode==="numbers"){
+      bits.push(T(`${r.listings_new} nº Centris importé(s)`,`${r.listings_new} Centris no. imported`));
+      bits.push(T("identifiants seulement — déposer la grille (my:Partial) pour les prix",
+                  "identifiers only — drop the grid (my:Partial) for prices"));
+    } else {
+      bits.push(T(`${r.parsed_rows} ligne(s) lues · ${r.listings_new} nouvelle(s)`,`${r.parsed_rows} row(s) read · ${r.listings_new} new`));
+      if(r.listings_filled) bits.push(T(`${r.listings_filled} fiche(s) complétée(s)`,`${r.listings_filled} listing(s) completed`));
+    }
+    const ann=r.announced && (r.announced.announced!==undefined?r.announced:Object.values(r.announced)[0]);
+    if(ann&&ann.announced) bits.push(T(`avis client : courriel ${ann.email}, texto ${ann.sms}`,`client notified: email ${ann.email}, SMS ${ann.sms}`));
+    return bits.join(" · ");
+  };
+  const run=async(files)=>{
+    if(!files.length) return;
+    setBusy(true);
+    let list=files.map(f=>({name:f.name,state:"wait",line:""}));
+    setJobs(list);
+    let gap=null, failed=0;
+    for(let i=0;i<files.length;i++){
+      list=list.map((j,k)=>k===i?{...j,state:"run"}:j); setJobs([...list]);
+      try{
+        const f=files[i];
+        const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+          rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+        const r=await api("/connectors/matrix/ingest-pdf",{method:"POST",
+          body:JSON.stringify({contact_id:typeof cid==="function"?cid():cid, content_b64:b64, filename:f.name})});
+        if(r.price_gap&&r.price_gap.listings!==undefined) gap=r.price_gap;
+        list=list.map((j,k)=>k===i?{...j,state:"ok",line:describe(r,f.name)}:j);
+      }catch(err){ failed++;
+        list=list.map((j,k)=>k===i?{...j,state:"err",line:err.message}:j); }
+      setJobs([...list]);
+    }
+    setBusy(false);
+    if(gap && gap.without_price>0)
+      list=[...list,{name:"—",state:"warn",
+        line:T(`${gap.without_price} inscription(s) sur ${gap.listings} n'ont toujours pas de prix : le microsite reste masqué tant que le prix est inconnu. Déposer l'export de la GRILLE (my:Partial) avec « Grille pour <client> » sélectionné.`,
+               `${gap.without_price} of ${gap.listings} listings still have no price: the microsite stays hidden while the price is unknown. Drop the GRID export (my:Partial) with "Grid for <client>" selected.`)}];
+    setJobs([...list]);
+    if(failed) toast(T(`${failed} fichier(s) en échec — voir le rapport`,`${failed} file(s) failed — see the report`),true);
+    if(onDone) onDone();
+  };
+  return <>
+    <label className={"mono text-[10px] px-3 py-1.5 rounded border cursor-pointer inline-block "+(busy?"border-[var(--line)]/40 text-[var(--mute)]":"border-[var(--line)] hover:border-[var(--amber)]")}>
+      {busy?T("Traitement…","Processing…"):label}
+      <input type="file" accept="application/pdf" multiple={!!multiple} className="hidden" disabled={busy}
+        onChange={e=>{ run([...(e.target.files||[])]); e.target.value=""; }}/>
+    </label>
+    {jobs && <div className="mt-2 rounded border border-[var(--line)] bg-black/20 p-2">
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex-1 h-1.5 rounded-full bg-[var(--line)]/40 overflow-hidden">
+          <div className="h-full bg-[var(--amber)] transition-all duration-300" style={{width:pct+"%"}}/>
+        </div>
+        <span className="mono text-[10px] text-[var(--mute)] w-9 text-right">{pct}%</span>
+        {!busy && <button onClick={()=>setJobs(null)} className="mono text-[10px] text-[var(--mute)] hover:text-white">✕</button>}
+      </div>
+      {jobs.map((j,i)=>(
+        <div key={i} className="mono text-[10px] py-0.5 flex gap-1.5 items-start">
+          <span className="shrink-0">{j.state==="ok"?"✓":j.state==="err"?"✕":j.state==="warn"?"⚠":j.state==="run"?"…":"·"}</span>
+          <span className={"shrink-0 truncate max-w-[140px] "+(j.state==="err"?"text-red-300":j.state==="warn"?"amber":"text-[var(--ink)]")}>{j.name}</span>
+          <span className={j.state==="err"?"text-red-300":j.state==="warn"?"amber":"text-[var(--mute)]"}>{j.line||(j.state==="run"?T("analyse du PDF…","parsing the PDF…"):"")}</span>
+        </div>))}
+    </div>}
+    {hint && <div className="mono text-[10px] text-[var(--mute)] mt-2">{hint}</div>}
+  </>;
+}
+
+// Proof-read the client-facing alert email before it ever goes out: preview
+// renders the real template in a new tab, test sends one real copy. Neither
+// marks a listing as announced nor writes an event.
+function AlertMailPanel({cid, email, toast}) {
+  const [to,setTo]=useState(""); const [busy,setBusy]=useState(false);
+  const preview=async()=>{
+    try{
+      const r=await fetch(`/api/alert-mail/preview?contact_id=${cid}`,
+        {headers:{"X-Tenant-Id":TENANT, ...(APIKEY?{"X-Radar-Key":APIKEY}:{})}});
+      if(!r.ok) throw new Error(T("Aperçu indisponible","Preview unavailable"));
+      const w=window.open("","_blank");
+      if(w){ w.document.write(await r.text()); w.document.close(); }
+    }catch(e){ toast(e.message,true); }
+  };
+  const send=async()=>{
+    setBusy(true);
+    try{ const r=await api("/alert-mail/test",{method:"POST",
+        body:JSON.stringify({contact_id:cid, to:to.trim()})});
+      toast(r.status==="sent"
+        ? T(`Courriel envoyé à ${r.to} — ${r.listings} inscription(s)`,
+            `Email sent to ${r.to} — ${r.listings} listing(s)`)
+        : r.status==="simulated"
+          ? T("SMTP non configuré — rien n'a été envoyé (secrets SMTP_*)",
+              "SMTP not configured — nothing was sent (SMTP_* secrets)")
+          : T(`Échec d'envoi vers ${r.to} — vérifier les secrets SMTP_*`,
+              `Send failed to ${r.to} — check the SMTP_* secrets`),
+        r.status!=="sent"); }
+    catch(e){ toast(e.message,true); }
+    setBusy(false);
+  };
+  return <div className="panel p-3 mt-3">
+    <div className="mono text-[10px] amber mb-2">{T("▮ COURRIEL D'ALERTE — aperçu et test","▮ ALERT EMAIL — preview and test")}</div>
+    <div className="flex flex-wrap gap-2 items-center">
+      <button onClick={preview} className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">
+        {T("👁 Aperçu du gabarit","👁 Preview the template")}</button>
+      <input value={to} onChange={e=>setTo(e.target.value)} placeholder={email||T("votre@courriel.ca","you@example.com")}
+        className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] flex-1 min-w-[180px]"/>
+      <button onClick={send} disabled={busy}
+        className="mono text-[10px] px-3 py-1.5 rounded bg-[var(--amber)]/90 text-black font-semibold disabled:opacity-40">
+        {busy?T("Envoi…","Sending…"):T("✉ Envoyer un test","✉ Send a test")}</button>
+    </div>
+    <div className="mono text-[10px] text-[var(--mute)] mt-2">
+      {T("Vide = l'adresse réelle du client. Aucune inscription n'est marquée comme annoncée et aucun événement n'est écrit — sauf si vous cliquez un lien du courriel (c'est justement la mesure).",
+         "Empty = the client's real address. No listing is marked announced and no event is written — unless you click a link in the email (that click IS the measurement).")}
+    </div>
+  </div>;
+}
+
+// Broker side of the client's portal shelf: read what they uploaded, answer
+// their notes, file documents back — so a promise to purchase or a
+// pre-approval never has to travel as an email attachment.
+function VaultPanel({cid, toast}) {
+  const [d,setD]=useState(null); const [draft,setDraft]=useState("");
+  const [busy,setBusy]=useState("");
+  const load=useCallback(async()=>{ try{ setD(await api(`/clients/${cid}/vault`)); }catch(e){} },[cid]);
+  useEffect(()=>{ load(); },[load]);
+  const send=async()=>{
+    const body=draft.trim(); if(!body) return; setBusy("note");
+    try{ await api(`/clients/${cid}/vault/notes`,{method:"POST",body:JSON.stringify({body})});
+      setDraft(""); await load(); toast(T("Note envoyée au portail du client","Note sent to the client's portal")); }
+    catch(e){ toast(e.message,true); }
+    setBusy("");
+  };
+  const upload=async(f)=>{
+    if(!f) return; setBusy("up");
+    try{
+      const b64=await new Promise((res,rej)=>{ const rd=new FileReader();
+        rd.onload=()=>res(String(rd.result).split(",")[1]); rd.onerror=rej; rd.readAsDataURL(f); });
+      await api(`/clients/${cid}/vault/documents`,{method:"POST",
+        body:JSON.stringify({name:f.name, content_b64:b64})});
+      await load(); toast(T("Document déposé dans le portail","Document filed in the portal")); }
+    catch(e){ toast(e.message,true); }
+    setBusy("");
+  };
+  const del=async(id)=>{ try{ await api(`/clients/${cid}/vault/documents/${id}`,{method:"DELETE"}); await load(); }catch(e){ toast(e.message,true); } };
+  if(!d) return null;
+  // Fetched as a blob, not window.open: the key travels in the X-Radar-Key
+  // header — never as a query string that would land in access logs.
+  const dl=async(id,name)=>{
+    try{
+      const r=await fetch(`/api/clients/${cid}/vault/documents/${id}`,
+        {headers:{"X-Tenant-Id":TENANT, ...(APIKEY?{"X-Radar-Key":APIKEY}:{})}});
+      if(!r.ok) throw new Error(T("Téléchargement impossible","Download failed"));
+      const url=URL.createObjectURL(await r.blob());
+      const a=document.createElement("a"); a.href=url; a.download=name||"document";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+    }catch(e){ toast(e.message,true); }
+  };
+  return <div className="panel p-3 mt-3">
+    <div className="mono text-[10px] amber mb-2">{T("▮ DOSSIER CLIENT — documents & notes du portail","▮ CLIENT FILE — portal documents & notes")}</div>
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <div className="mono text-[10px] text-[var(--mute)] mb-1">{T("Documents","Documents")} ({d.documents.length})</div>
+        {d.documents.length===0 && <div className="text-xs text-[var(--mute)]">{T("Aucun document.","No documents.")}</div>}
+        {d.documents.map(x=>(
+          <div key={x.id} className="flex items-center gap-2 mono text-[10px] py-1 border-b border-[var(--line)]/30 last:border-0">
+            <span>{x.uploaded_by==="client"?"⬆":"⬇"}</span>
+            <button onClick={()=>dl(x.id,x.name)} className="truncate text-left hover:text-[var(--amber)] flex-1" title={x.name}>{x.name}</button>
+            <span className="text-[var(--mute)] shrink-0">{x.created_at.slice(0,10)}</span>
+            <button onClick={()=>del(x.id)} className="text-[var(--mute)] hover:text-red-300 shrink-0">✕</button>
+          </div>))}
+        <label className="mono text-[10px] px-2 py-1 mt-2 rounded border border-[var(--line)] hover:border-[var(--amber)] cursor-pointer inline-block">
+          {busy==="up"?T("Envoi…","Uploading…"):T("＋ Déposer un document","＋ File a document")}
+          <input type="file" className="hidden" onChange={e=>{ upload(e.target.files&&e.target.files[0]); e.target.value=""; }}/>
+        </label>
+      </div>
+      <div>
+        <div className="mono text-[10px] text-[var(--mute)] mb-1">{T("Notes","Notes")}
+          {d.unread_before>0 && <span className="ml-1 amber">· {d.unread_before} {T("non lue(s)","unread")}</span>}</div>
+        <div className="space-y-1 max-h-40 overflow-auto mb-2">
+          {d.notes.length===0 && <div className="text-xs text-[var(--mute)]">{T("Aucun échange.","No messages.")}</div>}
+          {d.notes.map(n=>(
+            <div key={n.id} className={"text-[11px] p-1.5 rounded "+(n.author==="client"?"bg-emerald-400/10":"bg-black/20")}>
+              <div className="mono text-[9px] text-[var(--mute)]">{n.author==="client"?T("client","client"):T("vous","you")} · {n.created_at.replace("T"," ").slice(0,16)}</div>
+              <div className="whitespace-pre-wrap">{n.body}</div>
+            </div>))}
+        </div>
+        <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={2}
+          placeholder={T("Répondre au client…","Reply to the client…")}
+          className="w-full bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]"/>
+        <button onClick={send} disabled={!draft.trim()||busy==="note"}
+          className="mono text-[10px] px-3 py-1.5 mt-1 rounded bg-[var(--amber)]/90 text-black font-semibold disabled:opacity-40">
+          {busy==="note"?T("Envoi…","Sending…"):T("Envoyer","Send")}</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function CriteriaPanel({cid, toast}) {
+  const [d,setD]=useState(null); const [schema,setSchema]=useState(null);
+  const [form,setForm]=useState(null); const [busy,setBusy]=useState(false);
+  const load=useCallback(async()=>{ try{ setD(await api(`/clients/${cid}/criteria`)); }catch(e){} },[cid]);
+  useEffect(()=>{ load(); },[load]);
+  useEffect(()=>{ (async()=>{ try{ setSchema(await api(`/criteria/schema?lang=${LANG}`)); }catch(e){} })(); },[]);
+  const fmt=(c)=>{ if(!c) return "—";
+    const p=c.price||{}; const bits=[];
+    if (p.min||p.max) bits.push(`${(p.min||0).toLocaleString()}–${(p.max||0).toLocaleString()} $`);
+    if (c.beds) bits.push(`${c.beds}+ ${T("cc","bd")}`);
+    if (c.baths) bits.push(`${c.baths}+ ${T("sdb","ba")}`);
+    if ((c.areas||[]).length) bits.push(c.areas.slice(0,3).join(", "));
+    const extra=["pool","amenities","view","water","basement","property_types"]
+      .reduce((n,k)=>n+((c[k]||[]).length?1:0),0);
+    if (extra) bits.push(T(`+${extra} filtre(s)`,`+${extra} filter(s)`));
+    return bits.join(" · ")||T("aucun critère","no criteria"); };
+  const save=async()=>{
+    setBusy(true);
+    try{ const r=await api(`/clients/${cid}/criteria`,{method:"PUT", body:JSON.stringify(form)});
+      toast(T("Recherche curée enregistrée — balayage lancé","Curated search saved — sweep running"));
+      setD(x=>({...(x||{}), broker:r.broker})); setForm(null); }
+    catch(e){ toast(e.message,true); } finally{ setBusy(false); } };
+  const clear=async()=>{
+    if (!window.confirm(T("Retirer la recherche curée ? Les critères du client continuent de tourner.",
+                          "Remove the curated search? The client's own criteria keep running."))) return;
+    try{ await api(`/clients/${cid}/criteria`,{method:"DELETE"});
+      toast(T("Recherche curée retirée","Curated search removed")); setForm(null); load(); }
+    catch(e){ toast(e.message,true);} };
+  if (!d) return null;
+  return <div className="panel p-3 mt-3">
+    <div className="flex items-center justify-between mb-2">
+      <div className="mono text-[10px] amber">{T("▮ CRITÈRES DE RECHERCHE — curés + client","▮ SEARCH CRITERIA — curated + client")}</div>
+      <div className="flex gap-2">
+        <button disabled={busy||!schema} onClick={()=>setForm(form?null:{...(d.broker||{})})}
+          className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-[var(--amber)] disabled:opacity-40">
+          {form?T("✕ Fermer","✕ Close"):d.broker?T("✎ Modifier","✎ Edit"):T("➕ Définir","➕ Set")}</button>
+        {d.broker && <button onClick={clear} className="mono text-[10px] px-2 py-1 rounded border border-[var(--line)] hover:border-red-400">✖</button>}
+      </div>
+    </div>
+    <div className="mono text-[10px] py-1 border-b border-[var(--line)]/30 flex gap-2">
+      <span className="text-[var(--amber)] shrink-0">{T("Courtier","Broker")}</span>
+      <span className="flex-1 truncate">{fmt(d.broker)}</span>
+    </div>
+    {d.broker && d.broker.note && <div className="text-[10px] text-[var(--mute)] italic py-1">« {d.broker.note} »</div>}
+    <div className="mono text-[10px] py-1 flex gap-2">
+      <span className="text-sky-300 shrink-0">{T("Client","Client")}</span>
+      <span className="flex-1 truncate">{d.client?fmt(d.client):T("aucun critère enregistré au portail","no criteria saved in the portal")}</span>
+    </div>
+    {form && schema && <div className="mt-3 border-t border-[var(--line)]/40 pt-3">
+      {schema.groups.map(g=>{
+        const fs=schema.fields.filter(f=>f.group===g.value);
+        if (!fs.length) return null;
+        return <div key={g.value} className="mb-3">
+          <div className="mono text-[10px] text-[var(--mute)] mb-1">{g.label}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {fs.map(f=><label key={f.key} className="block">
+              <div className="mono text-[10px] mb-0.5 flex gap-1">
+                <span>{f.label}</span>
+                {!f.filterable && <span className="text-[var(--mute)]" title={schema.note}>◦</span>}
+              </div>
+              <CriteriaField f={f} val={form[f.key]}
+                set={v=>setForm(x=>({...x, [f.key]:v}))}/>
+            </label>)}
+          </div>
+        </div>;})}
+      <label className="block mb-2">
+        <div className="mono text-[10px] mb-0.5">{T("Note — pourquoi ces critères","Note — why these criteria")}</div>
+        <input className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] w-full"
+          value={form.note||""} onChange={e=>setForm(x=>({...x, note:e.target.value}))}/>
+      </label>
+      <div className="flex gap-2 items-center">
+        <button disabled={busy} onClick={save} className="mono text-[10px] px-3 py-1 rounded border border-[var(--amber)] text-[var(--amber)] disabled:opacity-40">
+          {T("Enregistrer et balayer","Save and sweep")}</button>
+        <span className="mono text-[10px] text-[var(--mute)]">{T("◦ = conservé mais pas encore filtré par le flux","◦ = kept but not yet filtered by the feed")}</span>
+      </div>
+    </div>}
+    <div className="mono text-[10px] text-[var(--mute)] mt-2">
+      {d.provider==="aucun"
+        ? T(`Aucun flux branché (${d.error||""}) — les critères sont conservés et s'activeront dès le DDF®/Source.immo.`,
+            `No feed connected (${d.error||""}) — criteria are kept and activate as soon as DDF®/Source.immo is wired.`)
+        : d.provider==="demo"
+          ? T("Fournisseur DÉMO actif — fiches fabriquées (nº 99xxxxxx, « (démo) »). Mettre criteria_demo_provider=false en production.",
+              "DEMO provider active — fabricated listings (99xxxxxx, '(démo)'). Set criteria_demo_provider=false in production.")
+          : T(`Flux « ${d.provider} » — les deux jeux tournent au balayage; enregistrer relance tout de suite.`,
+              `Feed '${d.provider}' — both sets run on each sweep; saving triggers one immediately.`)}
+    </div>
   </div>;
 }
 
@@ -447,6 +788,16 @@ function ContactsView({toast, on, feats}) {
       <span className="mono text-[9px] text-[var(--mute)] mr-1">{T("STATUT","STATUS")}</span>
       {[["all",T("Tous","All")],["lead",`Leads (${nLeads})`],["client",T("Clients Centris","Centris clients")+` (${contacts.length-nLeads})`]].map(([k,l])=>(
         <button key={k} onClick={()=>setLife(k)} className={chipCls(life===k)}>{l}</button>))}
+      <span className="ml-auto inline-flex gap-2 items-center flex-wrap">
+        <select id="pdfclient" className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px]">
+          <option value="0">{T("PDF détaillé — routage auto","Detailed PDF — auto-route")}</option>
+          {contacts.filter(c=>c.lifecycle==="client").map(c=>(
+            <option key={c.id} value={c.id}>{T("Grille pour","Grid for")} {c.name}</option>))}
+        </select>
+        <PdfImport multiple toast={toast}
+          cid={()=>+document.getElementById("pdfclient").value}
+          label={T("📄 Importer PDF Matrix…","📄 Import Matrix PDFs…")}/>
+      </span>
     </div>
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
       {shown.map(c=>(
@@ -559,6 +910,18 @@ function ContactsView({toast, on, feats}) {
           </div>
           {toolOut && <pre className="mono text-[10px] mt-2 p-2 bg-black/30 rounded whitespace-pre-wrap max-h-40 overflow-auto">{toolOut}</pre>}
         </div>}
+        <div className="panel p-3 mt-3">
+          <div className="mono text-[10px] amber mb-2">{T("▮ IMPORT PDF MATRIX — tableaux sans inscriptions dans le courriel","▮ MATRIX PDF IMPORT — boards with link-only emails")}</div>
+          <PdfImport multiple cid={sel.id} toast={toast}
+            label={T("📄 Déposer le(s) PDF des résultats…","📄 Drop the results PDF(s)…")}/>
+          <div className="mono text-[10px] text-[var(--mute)] mt-2">
+            {T("Dans Matrix : résultats → Sélectionner tout → Imprimer PDF. Grille (my:Partial) = crée les inscriptions · « Client Detailed with Photo Album » = les ENRICHIT (année, pièces → plan 3D, taxes, description, photos). Aussi automatique : envoyer le PDF par courriel à l'adresse d'admission du client.",
+               "In Matrix: results → Select all → Print PDF. Grid (my:Partial) = creates the listings · 'Client Detailed with Photo Album' = ENRICHES them (year, rooms → 3D plan, taxes, description, photos). Also automatic: email the PDF to the client's intake address.")}
+          </div>
+        </div>
+        {sel.lifecycle==="client" && <CriteriaPanel cid={sel.id} toast={toast}/>}
+        {sel.lifecycle==="client" && on && on("alert_mailer") && <AlertMailPanel cid={sel.id} email={sel.email} toast={toast}/>}
+        {sel.lifecycle==="client" && on && on("client_documents") && <VaultPanel cid={sel.id} toast={toast}/>}
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}
         <div className="panel p-3 mt-3">
           <div className="mono text-[10px] amber mb-2">{T("▮ CHRONOLOGIE UNIFIÉE — Vitrine + Matrix + FUB + Hub","▮ UNIFIED TIMELINE — Vitrine + Matrix + FUB + Hub")}</div>

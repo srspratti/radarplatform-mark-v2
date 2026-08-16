@@ -44,6 +44,15 @@ serves everything.
 6. **View as client** — "👁 Ouvrir le portail d'un client…" selector in the
    dashboard top bar; "👁 Portail client" button in `/ops`; seed prints every
    portal URL and intake address.
+7. **The client is told, and comes back into the portal** — new listings fire
+   a tracked email (`alert_mailer`) and a short SMS (`alert_sms`) to the
+   client's own address and phone, both pointing at the Vitrine. Each listing
+   is announced once (`announced_at`), and the internal edition defers the
+   announcement until the facts are in, so one email carries real addresses.
+8. **Client file** — documents and notes move both ways inside the portal
+   (`client_documents`): the client uploads their pre-approval, the broker
+   files the promise to purchase and answers in the same thread. No email
+   attachments, and the exchange feeds the engagement score.
 
 ## Quickstart
 

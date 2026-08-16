@@ -1,0 +1,187 @@
+"""CREA DDF® enrichment slot (mock RESO Web API)."""
+import base64
+import json
+
+import httpx
+
+from radar_hub.connectors.ddf import (DDFClient, _criteria_filter,
+                                      match_criteria, sweep)
+from radar_hub.models import Listing, ListingPhoto, PortalKV
+
+T = "danny"
+_JPEG = b"\xff\xd8\xff\xe0FAKEJPEG"
+
+_PROPERTY = {"value": [{
+    "ListingId": "17004507", "YearBuilt": 2010, "LivingArea": 2014.03,
+    "LotSizeArea": 50491.33, "TaxAnnualAmount": 3311,
+    "PublicRemarks": "Nestled in the heart of the golf course…",
+    "ListingURL": "https://www.realtor.ca/real-estate/17004507",
+    "Media": [{"MediaURL": "https://ddf.media/1.jpg"},
+              {"MediaURL": "https://ddf.media/2.jpg"}],
+}]}
+
+
+_SEARCH = {"value": [
+    {"ListingId": "20001111", "UnparsedAddress": "12 Rue du Golf",
+     "City": "Mont-Blanc", "ListPrice": 449900, "BedroomsTotal": 3,
+     "BathroomsTotalInteger": 2, "PropertySubType": "Single Family",
+     "ListingURL": "https://www.realtor.ca/real-estate/20001111"},
+    {"ListingId": "20002222", "UnparsedAddress": "8 Ch. des Cimes",
+     "City": "Mont-Blanc", "ListPrice": 512000, "BedroomsTotal": 4,
+     "BathroomsTotalInteger": 2, "PropertySubType": "Bungalow",
+     "ListingURL": ""},
+]}
+
+
+def _transport():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            body = request.content.decode()
+            assert "client_credentials" in body and "cid-1" in body
+            return httpx.Response(200, json={"access_token": "tok-1"})
+        if request.url.path.endswith("/Property"):
+            assert request.headers["Authorization"] == "Bearer tok-1"
+            filt = request.url.params["$filter"]
+            if "17004507" in filt:
+                return httpx.Response(200, json=_PROPERTY)
+            if "ListPrice ge" in filt:
+                return httpx.Response(200, json=_SEARCH)
+            return httpx.Response(200, json={"value": []})
+        if request.url.host == "ddf.media":
+            return httpx.Response(200, content=_JPEG)
+        return httpx.Response(404)
+    return httpx.MockTransport(handler)
+
+
+def _client():
+    return DDFClient(client_id="cid-1", client_secret="sec-1",
+                     token_url="https://id.test/token",
+                     base="https://api.test/odata/v1",
+                     transport=_transport())
+
+
+def test_ddf_sweep_enriches_known_listings(client, db):
+    lead = client.post("/api/leads", json={"name": "DDF Client",
+                                           "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    db.add(Listing(tenant_id=T, contact_id=c["id"], centris_no="17004507",
+                   address="143-145 Allée du 15e"))
+    db.add(Listing(tenant_id=T, contact_id=c["id"], centris_no="99999999",
+                   address="1 rue Inconnue"))
+    db.commit()
+    r = sweep(db, T, _client())
+    assert r["enriched"] == 1 and r["unknown"] == 1
+    row = db.query(Listing).filter_by(centris_no="17004507").one()
+    assert row.details["year"] == 2010
+    assert row.details["living_sqft"] == 2014
+    assert row.details["taxes_mun"] == 3311
+    assert row.details["source"] == "ddf"
+    assert "realtor.ca" in row.url
+    photos = (db.query(ListingPhoto)
+              .filter_by(tenant_id=T, centris_no="17004507").all())
+    assert len(photos) == 2
+    assert base64.b64decode(photos[0].content) == _JPEG
+    # second sweep: already stamped source=ddf → nothing rescanned
+    r2 = sweep(db, T, _client())
+    assert r2["enriched"] == 0
+
+
+def test_ddf_unconfigured_is_dormant(client):
+    r = client.post("/api/connectors/ddf/enrich").json()
+    assert r["enriched"] == 0 and "DDF" in r["error"]
+    s = client.get("/api/connectors/ddf/status").json()
+    assert s["configured"] is False
+
+
+def test_ddf_match_criteria_fills_portals(client, db):
+    """The licensed criteria sweep: each client's saved Vitrine prefs run
+    against the DDF® pool; matches land in their inventory, deduped."""
+    lead = client.post("/api/leads", json={"name": "Criteria Client",
+                                           "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    db.add(PortalKV(tenant_id=T, token=c["portal_token"],
+                    key="vitrine2_prefs",
+                    value=json.dumps({"p": {
+                        "pmin": 400000, "pmax": 650000, "beds": 3,
+                        "areas": ["Mont-Blanc", "Val-d'Or"]}})))
+    db.commit()
+    r = match_criteria(db, T, _client())
+    assert r["clients"] == 1 and r["matched"] == 2 and r["new"] == 2
+    rows = (db.query(Listing)
+            .filter_by(tenant_id=T, contact_id=c["id"]).all())
+    assert {x.centris_no for x in rows} == {"20001111", "20002222"}
+    hit = next(x for x in rows if x.centris_no == "20001111")
+    assert hit.price == 449900 and hit.beds == 3
+    assert "realtor.ca" in hit.url
+    # second run: same pool → all dups, nothing new
+    r2 = match_criteria(db, T, _client())
+    assert r2["matched"] == 2 and r2["new"] == 0
+    # OData filter shape (quote-escaping for areas like Val-d'Or)
+    f = _criteria_filter({"pmin": 400000, "pmax": 650000, "beds": 3,
+                          "areas": ["Val-d'Or"]})
+    assert "ListPrice ge 400000" in f and "ListPrice le 650000" in f
+    assert "BedroomsTotal ge 3" in f and "contains(City,'Val-d''Or')" in f
+
+
+def test_ddf_match_unconfigured_is_dormant(client):
+    r = client.post("/api/connectors/ddf/match").json()
+    assert r["clients"] == 0 and "DDF" in r["error"]
+
+
+def test_browser_printed_portal_page_numbers_only(client, db):
+    """A human prints the portal results page from the browser — the hub
+    lifts just the Centris numbers and creates stubs for licensed enrichment."""
+    from tests.test_pdf_ingest import _mini_pdf
+    PORTAL_TEXT = """25 Total listings from search Your new listings
+$28,000/month X 3 month[s]
+143-145 Allee du 15e Mont-Blanc
+Two or more storey built in 2010
+Centris No. : 17004507
+Date Sent : 2026-08-09
+$449,900 9-9A Rue Sicotte Sainte-Anne-du-Lac
+Centris No. : 12149325
+Date Sent : 2026-08-09
+"""
+    lead = client.post("/api/leads", json={"name": "Print Client",
+                                           "source": "matrix_visit"}).json()
+    c = client.post(f"/api/leads/{lead['id']}/convert").json()
+    pdf = base64.b64encode(_mini_pdf(PORTAL_TEXT)).decode()
+    r = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": pdf}).json()
+    assert r["mode"] == "numbers" and r["listings_new"] == 2
+    nos = {x.centris_no for x in
+           db.query(Listing).filter_by(contact_id=c["id"]).all()}
+    assert nos == {"17004507", "12149325"}
+    # idempotent
+    r2 = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": c["id"], "content_b64": pdf}).json()
+    assert r2["listings_new"] == 0 and r2["listings_dup"] == 2
+
+
+def test_detailed_pdf_routes_without_contact(client, db):
+    """Global drop: a detailed PDF with no contact_id enriches every client
+    holding that Centris number."""
+    from tests.test_pdf_ingest import DETAILED_TEXT, SAMPLE_TEXT, _mini_pdf
+    ids = []
+    for n in (1, 2):
+        lead = client.post("/api/leads", json={
+            "name": f"Client {n}", "phone": f"514 555 02{n}0",
+            "source": "matrix_visit"}).json()
+        c = client.post(f"/api/leads/{lead['id']}/convert").json()
+        ids.append(c["id"])
+        client.post("/api/connectors/matrix/ingest-pdf", json={
+            "contact_id": c["id"],
+            "content_b64": base64.b64encode(_mini_pdf(SAMPLE_TEXT)).decode()})
+    r = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": 0,
+        "content_b64": base64.b64encode(_mini_pdf(DETAILED_TEXT)).decode()}).json()
+    assert r["mode"] == "detailed" and r["enriched"] == ["17004507"]
+    for cid in ids:
+        row = db.query(Listing).filter_by(contact_id=cid,
+                                          centris_no="17004507").one()
+        assert row.details["year"] == 2010
+    # grid PDF without a contact is refused with a clear message
+    r = client.post("/api/connectors/matrix/ingest-pdf", json={
+        "contact_id": 0,
+        "content_b64": base64.b64encode(_mini_pdf(SAMPLE_TEXT)).decode()})
+    assert r.status_code == 422 and "grille" in r.json()["detail"].lower()

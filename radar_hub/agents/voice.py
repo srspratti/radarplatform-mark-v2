@@ -50,8 +50,11 @@ def voice_provider_status() -> dict:
     telephony = bool(settings.TWILIO_SID and settings.TWILIO_TOKEN
                      and settings.TWILIO_FROM)
     cloned = bool(settings.ELEVENLABS_API_KEY and settings.ELEVENLABS_VOICE_ID)
+    ghl_sms = bool(settings.GHL_API_KEY and settings.GHL_LOCATION_ID)
     return {
         "telephony": "twilio" if telephony else "simulated",
+        "sms": ("twilio" if telephony
+                else "gohighlevel" if ghl_sms else "simulated"),
         "voice": "cloned" if cloned else ("tts" if telephony else "simulated"),
         "note": ("Appels réels (Twilio) · voix clonée du courtier (ElevenLabs)"
                  if telephony and cloned else

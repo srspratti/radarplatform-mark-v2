@@ -31,6 +31,32 @@ class Settings:
     FUB_API_KEY: str = os.getenv("FUB_API_KEY", "")
     FUB_BASE: str = os.getenv("FUB_BASE", "https://api.followupboss.com/v1")
 
+    # GoHighLevel (same connector contract as FUB: import + note writeback).
+    # GHL_API_KEY = a Private Integration token (Settings → Private
+    # Integrations, scopes: contacts read/write); GHL_LOCATION_ID = the
+    # sub-account's location id.
+    GHL_API_KEY: str = os.getenv("GHL_API_KEY", "")
+    GHL_LOCATION_ID: str = os.getenv("GHL_LOCATION_ID", "")
+    GHL_BASE: str = os.getenv("GHL_BASE", "https://services.leadconnectorhq.com")
+
+    # CREA DDF® (RESO Web API) — licensed listing enrichment by MLS number.
+    # The broker applies at crea.ca (member tools / National Shared Pool feed);
+    # unset = the slot stays dormant and PDF enrichment remains the path.
+    DDF_CLIENT_ID: str = os.getenv("DDF_CLIENT_ID", "")
+    DDF_CLIENT_SECRET: str = os.getenv("DDF_CLIENT_SECRET", "")
+    DDF_TOKEN_URL: str = os.getenv("DDF_TOKEN_URL",
+                                   "https://identity.crea.ca/connect/token")
+    DDF_BASE: str = os.getenv("DDF_BASE", "https://ddfapi.realtor.ca/odata/v1")
+
+    # Source.immo (ID-3 Technologies) — certified Centris data distributor.
+    # The broker signs a Centris data-distribution authorization through
+    # Source.immo, who issue an account id + API key for their Immo
+    # Distribution API. Unset = the slot stays dormant.
+    SOURCEIMMO_ACCOUNT_ID: str = os.getenv("SOURCEIMMO_ACCOUNT_ID", "")
+    SOURCEIMMO_API_KEY: str = os.getenv("SOURCEIMMO_API_KEY", "")
+    SOURCEIMMO_BASE: str = os.getenv("SOURCEIMMO_BASE",
+                                     "https://api-v1.source.immo")
+
     # Matrix inbox (IMAP ingestion of Centris/Matrix notification emails)
     MATRIX_IMAP_HOST: str = os.getenv("MATRIX_IMAP_HOST", "")
     MATRIX_IMAP_USER: str = os.getenv("MATRIX_IMAP_USER", "")

@@ -48,6 +48,7 @@ SOURCE_BASE = {
     "matrix_visit": 70,      # already engaged with real inventory
     "danny_channel": 55,     # warm referral / personal network
     "fub_import": 45,        # third-party portals via FUB
+    "ghl_import": 45,        # GoHighLevel CRM import (same trust tier as FUB)
     "own_generated": 40,     # our own capture forms
     "prospecting_agent": 25, # cold, agent-sourced
     "seller_intel": 30,      # homeowner flagged likely-to-list (seller side)

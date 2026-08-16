@@ -1,94 +1,186 @@
-# Radar Hub — forfait et fonctionnalités
-# ---------------------------------------
-# tier : le forfait vendu à ce courtier. Cumulatif :
+# Radar Hub — forfait et fonctionnalités / plan & features
+# ----------------------------------------------------------
+# FR · tier : le forfait vendu à ce courtier. Cumulatif :
 #   basic    → Porte ouverte QR, notes d'appel IA
 #   premium  → + réponse instantanée, alertes, relances auto, visites, rapports IA
 #   gold     → + client à vie, moteur d'avis, suivi de dossier, infolettre quartier
 #   platinum → + ACM, SMS/WhatsApp, registre de consentements
+# EN · tier: the plan sold to this broker. Cumulative:
+#   basic    → QR open house, AI call notes
+#   premium  → + instant reply, alerts, auto follow-ups, visits, AI reports
+#   gold     → + client-for-life, review engine, deal tracking, neighbourhood letter
+#   platinum → + CMA, SMS/WhatsApp, consent vault
 #
-# Peut être forcé au déploiement par la variable d'environnement RADAR_TIER.
+# FR · Peut être forcé au déploiement par la variable d'environnement RADAR_TIER.
+# EN · Can be forced at deploy time with the RADAR_TIER environment variable.
 tier = "platinum"
 
-# Forcer une fonctionnalité individuellement, peu importe le forfait.
-# Exemple : offrir le moteur d'avis en essai à un client premium.
+# FR · Forcer une fonctionnalité individuellement, peu importe le forfait.
+#      Exemple : offrir le moteur d'avis en essai à un client premium.
+# EN · Force a single feature on/off regardless of the plan.
+#      Example: trial the review engine for a premium customer.
 [overrides]
 # review_engine = true
 # messaging_sync = false
 
-# Réglages des fonctionnalités
+# Réglages des fonctionnalités / feature settings
 [settings]
-# Lien d'avis Google du courtier (moteur d'avis)
+# FR · Lien d'avis Google du courtier (moteur d'avis)
+# EN · The broker's Google review link (review engine)
 review_link = "https://g.page/r/VOTRE-FICHE-GOOGLE/review"
-# Accusé de réception automatique (réponse instantanée) — {name} = prénom du lead
+# FR · Accusé de réception automatique (réponse instantanée) — {name} = prénom du lead
+# EN · Automatic acknowledgement (instant reply) — {name} = the lead's first name
 auto_ack_fr = "Bonjour {name}, j'ai bien reçu votre demande — je vous reviens très vite. Danny"
 auto_ack_en = "Hi {name}, I received your request — I'll get back to you shortly. Danny"
-# Cadence de relance (jours après la capture du lead)
+# FR · Cadence de relance (jours après la capture du lead)
+# EN · Follow-up cadence (days after lead capture)
 sequence_days = [1, 3, 7, 30]
-# Taux d'appréciation annuel utilisé par le rapport de valeur (client à vie)
+# FR · Taux d'appréciation annuel utilisé par le rapport de valeur (client à vie)
+# EN · Annual appreciation rate used by the home-value report (client-for-life)
 appreciation_rate = 0.028
 
-# --- Alertes courriel traquées (alert_mailer) --------------------------------
-# Quand une alerte Centris arrive à l'adresse d'admission du client, le hub
-# renvoie SA PROPRE version avec des liens mesurés vers le portail (/l/…).
-# Les liens des courriels Centris eux-mêmes ne peuvent PAS être instrumentés —
-# on ne contrôle pas leur HTML; ce courriel miroir est le mécanisme de capture.
-# {n} = nombre de nouvelles inscriptions
+# --- Alertes courriel traquées / tracked alert emails (alert_mailer) ----------
+# FR · Quand une alerte Centris arrive à l'adresse d'admission du client, le hub
+#      renvoie SA PROPRE version avec des liens mesurés vers le portail (/l/…).
+#      Les liens des courriels Centris eux-mêmes ne peuvent PAS être instrumentés —
+#      on ne contrôle pas leur HTML; ce courriel miroir est le mécanisme de capture.
+# EN · When a Centris alert lands on the client's intake address, the hub sends
+#      ITS OWN version with measured portal links (/l/…). Links inside Centris'
+#      emails can NOT be instrumented — we don't control their HTML; this mirror
+#      email is the capture mechanism.
+# {n} = nombre de nouvelles inscriptions / number of new listings
 alert_mail_subject_fr = "{n} nouvelles inscriptions dans votre portail"
 alert_mail_subject_en = "{n} new listings in your portal"
 
-# --- Textos IA de seuil (ai_texts) -------------------------------------------
-# Client Centris : quand le score d'engagement atteint le seuil, l'IA envoie
-# le texto prédéfini ({name} = prénom), au plus une fois par période de repos.
+# --- Avis texto de nouvelles inscriptions / new-listing SMS (alert_sms) -------
+# FR · Le même événement déclenche un texto court vers le téléphone RÉEL du
+#      client : aucun détail de propriété, seulement le lien du portail — le
+#      client revient dans la Vitrine, donc son magasinage reste mesurable.
+#      Consentement LCAP requis (même porte que les textos IA).
+# EN · The same event fires a short text to the client's REAL phone: no
+#      property facts, just the portal link — the client comes back into the
+#      Vitrine, so their browsing stays measurable. CASL consent required
+#      (same gate as the AI texts).
+# {name} = prénom / first name · {n} = inscriptions / listings · {url} = portail
+listing_sms_fr = "Bonjour {name}, {n} nouvelle(s) inscription(s) vous attendent dans votre portail : {url}"
+listing_sms_en = "Hi {name}, {n} new listing(s) are waiting in your portal: {url}"
+
+# --- Textos IA de seuil / threshold-driven AI texts (ai_texts) ----------------
+# FR · Client Centris : quand le score d'engagement atteint le seuil, l'IA envoie
+#      le texto prédéfini ({name} = prénom), au plus une fois par période de repos.
+# EN · Centris client: when the engagement score crosses the threshold, the AI
+#      sends the canned text ({name} = first name), at most once per cooldown.
 engagement_text_threshold = 70
 engagement_text_cooldown_days = 7
 engagement_text_fr = "Bonjour {name}, je vois que de nouvelles propriétés vous intéressent — on planifie des visites? Danny"
 engagement_text_en = "Hi {name}, I see some listings caught your eye — want to book visits? Danny"
-# Lead : quand le score de priorité atteint le seuil, l'IA texte une seule fois
-# et une relance « rappeler » est créée pour le courtier (heures ci-dessous).
+# FR · Lead : quand le score de priorité atteint le seuil, l'IA texte une seule fois
+#      et une relance « rappeler » est créée pour le courtier (heures ci-dessous).
+# EN · Lead: when the priority score crosses the threshold, the AI texts once and
+#      a "call back" follow-up is created for the broker (hours below).
 priority_text_threshold = 75
 priority_callback_hours = 4
 priority_text_fr = "Bonjour {name}, merci pour votre demande — je vous appelle d'ici quelques heures. Danny"
 priority_text_en = "Hi {name}, thanks for reaching out — I'll call you within a few hours. Danny"
 
-# --- Agents vocaux IA (ai_voice_outreach · ai_client_checkin · ai_receptionist)
-# Prénom du courtier injecté dans tous les scripts ({broker}).
+# --- Agents vocaux IA / AI voice agents ---------------------------------------
+#     (ai_voice_outreach · ai_client_checkin · ai_receptionist)
+# FR · Prénom du courtier injecté dans tous les scripts ({broker}).
+# EN · Broker's first name injected into every script ({broker}).
 broker_name = "Danny"
-# Lead prioritaire : seuil de priorité IA, canal (voice = appel voix clonée /
-# sms), et délai de rappel humain promis dans le script.
+# FR · Lead prioritaire : seuil de priorité IA, canal (voice = appel voix clonée /
+#      sms), et délai de rappel humain promis dans le script.
+# EN · Priority lead: AI priority threshold, channel (voice = cloned-voice call /
+#      sms), and the human-callback delay promised in the script.
 voice_priority_threshold = 75
 voice_outreach_channel = "voice"
 voice_callback_hours = 2
-# Relance client Centris : seuil d'engagement « chaud », canal, et période de
-# repos entre deux relances IA (les clients inactifs — dormant — sont aussi
-# relancés, avec le message « rafraîchir la recherche »).
+# FR · Relance client Centris : seuil d'engagement « chaud », canal, et période de
+#      repos entre deux relances IA (les clients inactifs — dormant — sont aussi
+#      relancés, avec le message « rafraîchir la recherche »).
+# EN · Centris client check-in: "hot" engagement threshold, channel, and cooldown
+#      between AI check-ins (dormant clients are also nudged, with the
+#      "refresh your search" message).
 voice_checkin_hot_threshold = 70
 voice_checkin_channel = "sms"
 voice_checkin_cooldown_days = 14
-# Réceptionniste vocale — les messages d'accueil (appel manqué) sont bilingues,
-# français québécois d'abord (Loi 96). Personnalisables ici :
-# receptionist_greeting_fr / receptionist_greeting_en
-# receptionist_sms_fr / receptionist_sms_en
-# Scripts d'appel personnalisables : voice_lead_script_fr/en,
-# voice_checkin_hot_fr/en, voice_checkin_dormant_fr/en, qualification_sms_fr/en.
-# Voix clonée : définir ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID au déploiement.
+# FR · Réceptionniste vocale — les messages d'accueil (appel manqué) sont bilingues,
+#      français québécois d'abord (Loi 96). Personnalisables ici :
+#      receptionist_greeting_fr / receptionist_greeting_en
+#      receptionist_sms_fr / receptionist_sms_en
+#      Scripts d'appel personnalisables : voice_lead_script_fr/en,
+#      voice_checkin_hot_fr/en, voice_checkin_dormant_fr/en, qualification_sms_fr/en.
+#      Voix clonée : définir ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID au déploiement.
+# EN · Voice receptionist — missed-call greetings are bilingual, Québécois French
+#      first (Law 96). Customizable here:
+#      receptionist_greeting_fr / receptionist_greeting_en
+#      receptionist_sms_fr / receptionist_sms_en
+#      Customizable call scripts: voice_lead_script_fr/en,
+#      voice_checkin_hot_fr/en, voice_checkin_dormant_fr/en, qualification_sms_fr/en.
+#      Cloned voice: set ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID at deploy time.
 
-# --- Portail : créneaux de visite réels (visit_scheduler_live) ----------------
-# Plages hebdomadaires offertes aux clients ({jour} {heure}); le client choisit,
-# le courtier confirme (tâche + notification).
+# --- Portail : créneaux de visite réels / portal: live visit slots ------------
+#     (visit_scheduler_live)
+# FR · Plages hebdomadaires offertes aux clients ({jour} {heure}); le client
+#      choisit, le courtier confirme (tâche + notification).
+# EN · Weekly slots offered to clients ({day} {time}); the client picks, the
+#      broker confirms (task + notification).
 visit_slot_days = 5
 visit_slot_times = ["10:00", "11:30", "13:00", "15:30", "17:00", "18:30"]
 
-# --- Référence hypothécaire (mortgage_handoff) --------------------------------
+# --- Référence hypothécaire / mortgage referral (mortgage_handoff) -------------
 mortgage_partner_name = "Multi-Prêts — partenaire hypothécaire"
-mortgage_partner_url = ""   # vide = le clic notifie le courtier sans redirection
+# FR · vide = le clic notifie le courtier sans redirection
+# EN · empty = a click notifies the broker without redirecting
+mortgage_partner_url = ""
 
-# --- Rétroaction post-visite (visit_feedback) ---------------------------------
-feedback_window_days = 3    # visites complétées des N derniers jours
+# --- Rétroaction post-visite / post-visit feedback (visit_feedback) ------------
+# FR · visites complétées des N derniers jours / EN · visits completed in the last N days
+feedback_window_days = 3
 
-# --- Sentinelle d'échéances (deadline_sentinel) --------------------------------
-deadline_warn_days = 3      # alerte N jours avant l'échéance
+# --- Sentinelle d'échéances / deadline sentinel (deadline_sentinel) ------------
+# FR · alerte N jours avant l'échéance / EN · warn N days before the deadline
+deadline_warn_days = 3
 
-# --- Intelligence vendeur (seller_intelligence) --------------------------------
-# Fournisseur stub (démo) · slot Registre foncier / JLR prêt. Canaux :
-# lettre/script toujours permis; courriel/SMS avec base LCAP; voix automatisée
-# avec consentement EXPRÈS seulement (règles ADAD du CRTC).
+# --- Courriels Matrix « lien seulement » / link-only Matrix emails -------------
+# FR · Le bouton « Envoyer PDF » de Matrix envoie un LIEN vers le PDF, pas une
+#      pièce jointe. true = quand un courriel routé vers une adresse d'admission
+#      n'a ni inscriptions ni pièce jointe, le hub récupère UNE FOIS le document
+#      lié (aucune connexion — le lien s'ouvre sans session, le hub est le
+#      destinataire voulu du courriel). Zone d'appréciation : c'est une
+#      récupération programmatique depuis les serveurs de Matrix — désactivé par
+#      défaut, à vous de trancher.
+# EN · Matrix's "Email PDF" button sends a LINK to the PDF, not an attachment.
+#      true = when an email routed to an intake address carries neither listings
+#      nor an attachment, the hub fetches the linked document ONCE (no login —
+#      the link opens without a session, and the hub is the email's intended
+#      recipient). Judgment call: it is still a programmatic fetch from Matrix's
+#      servers — off by default, your decision to make.
+matrix_pdf_link_fetch = false
+
+# --- Correspondance par critères / criteria matching --------------------------
+# FR · Les critères sauvegardés du client (« Mes alertes » de la Vitrine) sont
+#      lancés contre le flux disponible; les correspondances arrivent dans son
+#      portail. Complète l'ingestion des auto-courriels Matrix (recherche
+#      CURÉE du courtier sur l'inventaire Centris complet) — ne la remplace
+#      pas : le DDF® ne porte que les inscriptions syndiquées.
+#      true = générateur DÉMO (inscriptions fabriquées, nº 99xxxxxx, adresse
+#      marquée « (démo) ») pour essayer le parcours avant les identifiants
+#      licenciés. À laisser false en production.
+# EN · The client's saved criteria (the Vitrine's "Mes alertes") run against
+#      whichever feed is available and matches land in their portal. This
+#      COMPLEMENTS Matrix auto-email ingestion (the broker's CURATED search
+#      over full Centris inventory) — it does not replace it: DDF® only
+#      carries syndicated listings.
+#      true = DEMO generator (fabricated listings, 99xxxxxx numbers, address
+#      tagged "(démo)") to exercise the flow before licensed credentials.
+#      Leave false in production.
+criteria_demo_provider = false
+
+# --- Intelligence vendeur / Seller Intelligence (seller_intelligence) ----------
+# FR · Fournisseur stub (démo) · slot Registre foncier / JLR prêt. Canaux :
+#      lettre/script toujours permis; courriel/SMS avec base LCAP; voix
+#      automatisée avec consentement EXPRÈS seulement (règles ADAD du CRTC).
+# EN · Stub provider (demo) · Registre foncier / JLR slot ready. Channels:
+#      letter/call script always allowed; email/SMS require a CASL basis;
+#      automated voice requires EXPRESS consent only (CRTC ADAD rules).
