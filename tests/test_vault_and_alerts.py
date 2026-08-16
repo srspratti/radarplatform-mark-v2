@@ -186,3 +186,50 @@ def test_a_clients_vault_is_not_reachable_through_another_clients_token(client, 
                     ).json()
     r = client.get(f"/api/vitrine/vault/{b.portal_token}/documents/{d['id']}")
     assert r.status_code == 404
+
+
+# ------------------------------------------------- alert email preview/test --
+def test_preview_renders_the_real_template_without_announcing(client, db):
+    c = _client(db)
+    client.post("/api/connectors/matrix/ingest-numbers",
+                json={"contact_id": c.id, "numbers": ["55555555"],
+                      "announce": False})
+    r = client.get(f"/api/alert-mail/preview?contact_id={c.id}")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    assert f"/l/{c.portal_token}/55555555" in r.text     # tracked links
+    db.expire_all()
+    row = db.query(Listing).filter_by(centris_no="55555555").first()
+    assert row.announced_at is None                      # preview costs nothing
+
+
+def test_preview_falls_back_to_sample_cards_for_an_empty_book(client, db):
+    c = _client(db)
+    r = client.get(f"/api/alert-mail/preview?contact_id={c.id}")
+    assert "1425 rue Sherbrooke" in r.text
+
+
+def test_test_send_reports_its_recipient_and_leaves_no_trace(client, db):
+    c = _client(db)
+    before = db.query(Listing).filter_by(contact_id=c.id).count()
+    r = client.post("/api/alert-mail/test",
+                    json={"contact_id": c.id, "to": "courtier@example.com"}).json()
+    assert r["to"] == "courtier@example.com"
+    assert r["status"] == "simulated"          # no SMTP_HOST in tests
+    assert r["used_sample_cards"] is True
+    assert db.query(Listing).filter_by(contact_id=c.id).count() == before
+    db.expire_all()
+    assert db.get(Contact, c.id).engagement_score == 0
+
+
+def test_test_send_defaults_to_the_clients_own_address(client, db):
+    c = _client(db)
+    r = client.post("/api/alert-mail/test", json={"contact_id": c.id}).json()
+    assert r["to"] == c.email
+
+
+def test_test_send_needs_a_recipient(client, db):
+    c = _client(db)
+    c.email = ""
+    db.commit()
+    assert client.post("/api/alert-mail/test",
+                       json={"contact_id": c.id}).status_code == 422

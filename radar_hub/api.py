@@ -744,6 +744,98 @@ def matrix_ingest_numbers(body: NumbersIn, db: Session = Depends(get_db),
                     "détaillé"}
 
 
+# ------------------------------------------------- alert email: see & test --
+# Rehearsing the client-facing email must not cost a real announcement: both
+# endpoints render the SAME builder the pipeline uses, but neither stamps
+# announced_at nor writes an event, so a listing stays un-announced and the
+# client's engagement score stays clean.
+SAMPLE_CARDS = [
+    {"centris_no": "12345678", "address": "1425 rue Sherbrooke O., Montréal",
+     "price": 749000, "beds": 3, "baths": 2, "prop_type": "Condo"},
+    {"centris_no": "23456789", "address": "88 av. des Pins, Blainville",
+     "price": 525000, "beds": 4, "baths": 2, "prop_type": "Maison"},
+]
+
+
+def _preview_cards(db: Session, t: str, c: Contact, limit: int = 3) -> list[dict]:
+    """The client's own most recent listings — sample cards only when their
+    book is empty, so what you proof-read is what they would receive."""
+    rows = (db.query(Listing).filter_by(tenant_id=t, contact_id=c.id)
+            .order_by(Listing.received_at.desc()).limit(limit).all())
+    if not rows:
+        return SAMPLE_CARDS
+    return [{"centris_no": r.centris_no,
+             "address": r.address or f"Centris {r.centris_no}",
+             "price": r.price, "beds": r.beds, "baths": r.baths,
+             "prop_type": r.prop_type} for r in rows]
+
+
+def _preview_contact(db: Session, t: str, contact_id: int) -> Contact:
+    if contact_id:
+        c = db.get(Contact, contact_id)
+        if not c or c.tenant_id != t:
+            raise HTTPException(404, "contact introuvable")
+        return c
+    c = (db.query(Contact).filter_by(tenant_id=t, lifecycle="client")
+         .order_by(Contact.engagement_score.desc()).first())
+    if not c:
+        raise HTTPException(404, "aucun client — préciser contact_id")
+    return c
+
+
+@router.get("/alert-mail/preview", dependencies=[Depends(auth)])
+def alert_mail_preview(contact_id: int = 0, lang: str = "",
+                       db: Session = Depends(get_db), t: str = Depends(tenant)):
+    """The alert email as the client would see it, rendered in the browser.
+    Open it directly: nothing is sent, nothing is recorded."""
+    from .mailer import build_alert_email
+    c = _preview_contact(db, t, contact_id)
+    if not c.portal_token:
+        c.issue_portal_token()
+        db.commit()
+    _, html, _ = build_alert_email(c, _preview_cards(db, t, c),
+                                   lang or c.language or "fr")
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+class AlertTestIn(BaseModel):
+    contact_id: int = 0
+    to: str = ""        # override recipient — proof it on your own inbox first
+    lang: str = ""
+
+
+@router.post("/alert-mail/test", dependencies=[Depends(auth)])
+def alert_mail_test(body: AlertTestIn, db: Session = Depends(get_db),
+                    t: str = Depends(tenant)):
+    """Send one real copy of the alert email through the configured SMTP.
+    Defaults to the client's own address; pass `to` to proof it on yours.
+    status: sent | simulated (no SMTP_HOST) | failed."""
+    from .mailer import build_alert_email, send_email
+    c = _preview_contact(db, t, contact_id=body.contact_id)
+    if not c.portal_token:
+        c.issue_portal_token()
+        db.commit()
+    to = (body.to or c.email or "").strip()
+    if not to:
+        raise HTTPException(422, "aucun destinataire (contact sans courriel — "
+                                 "préciser `to`)")
+    cards = _preview_cards(db, t, c)
+    subject, html, text = build_alert_email(c, cards, body.lang or c.language
+                                            or "fr")
+    status = send_email(to, subject, html, text)
+    return {"status": status, "to": to, "subject": subject,
+            "listings": len(cards),
+            "used_sample_cards": cards is SAMPLE_CARDS,
+            "smtp_host": settings.SMTP_HOST or "(non configuré)",
+            "from": settings.SMTP_FROM or settings.SMTP_USER or "",
+            "portal_url": f"{settings.PUBLIC_BASE_URL.rstrip('/')}"
+                          f"/portail/{c.portal_token}",
+            "note": "Aucune inscription marquée comme annoncée, aucun "
+                    "événement écrit. Cliquer un lien du courriel enregistre "
+                    "un email.link_clicked pour ce client (c'est le "
+                    "mécanisme de mesure)."}
+
+
 # ---------------------------------------------------------------- webhooks --
 @router.post("/webhooks/vitrine")
 async def vitrine_webhook(request: Request, db: Session = Depends(get_db),

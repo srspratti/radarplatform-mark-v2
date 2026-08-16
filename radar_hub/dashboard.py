@@ -416,6 +416,54 @@ function CriteriaField({f, val, set}) {
   </select>;
 }
 
+// Proof-read the client-facing alert email before it ever goes out: preview
+// renders the real template in a new tab, test sends one real copy. Neither
+// marks a listing as announced nor writes an event.
+function AlertMailPanel({cid, email, toast}) {
+  const [to,setTo]=useState(""); const [busy,setBusy]=useState(false);
+  const preview=async()=>{
+    try{
+      const r=await fetch(`/api/alert-mail/preview?contact_id=${cid}`,
+        {headers:{"X-Tenant-Id":TENANT, ...(APIKEY?{"X-Radar-Key":APIKEY}:{})}});
+      if(!r.ok) throw new Error(T("Aperçu indisponible","Preview unavailable"));
+      const w=window.open("","_blank");
+      if(w){ w.document.write(await r.text()); w.document.close(); }
+    }catch(e){ toast(e.message,true); }
+  };
+  const send=async()=>{
+    setBusy(true);
+    try{ const r=await api("/alert-mail/test",{method:"POST",
+        body:JSON.stringify({contact_id:cid, to:to.trim()})});
+      toast(r.status==="sent"
+        ? T(`Courriel envoyé à ${r.to} — ${r.listings} inscription(s)`,
+            `Email sent to ${r.to} — ${r.listings} listing(s)`)
+        : r.status==="simulated"
+          ? T("SMTP non configuré — rien n'a été envoyé (secrets SMTP_*)",
+              "SMTP not configured — nothing was sent (SMTP_* secrets)")
+          : T(`Échec d'envoi vers ${r.to} — vérifier les secrets SMTP_*`,
+              `Send failed to ${r.to} — check the SMTP_* secrets`),
+        r.status!=="sent"); }
+    catch(e){ toast(e.message,true); }
+    setBusy(false);
+  };
+  return <div className="panel p-3 mt-3">
+    <div className="mono text-[10px] amber mb-2">{T("▮ COURRIEL D'ALERTE — aperçu et test","▮ ALERT EMAIL — preview and test")}</div>
+    <div className="flex flex-wrap gap-2 items-center">
+      <button onClick={preview} className="mono text-[10px] px-3 py-1.5 rounded border border-[var(--line)] hover:border-[var(--amber)]">
+        {T("👁 Aperçu du gabarit","👁 Preview the template")}</button>
+      <input value={to} onChange={e=>setTo(e.target.value)} placeholder={email||T("votre@courriel.ca","you@example.com")}
+        className="bg-[#0a1f28] border border-[var(--line)] rounded px-2 py-1 mono text-[10px] flex-1 min-w-[180px]"/>
+      <button onClick={send} disabled={busy}
+        className="mono text-[10px] px-3 py-1.5 rounded bg-[var(--amber)]/90 text-black font-semibold disabled:opacity-40">
+        {busy?T("Envoi…","Sending…"):T("✉ Envoyer un test","✉ Send a test")}</button>
+    </div>
+    <div className="mono text-[10px] text-[var(--mute)] mt-2">
+      {T("Vide = l'adresse réelle du client. Aucune inscription n'est marquée comme annoncée et aucun événement n'est écrit — sauf si vous cliquez un lien du courriel (c'est justement la mesure).",
+         "Empty = the client's real address. No listing is marked announced and no event is written — unless you click a link in the email (that click IS the measurement).")}
+    </div>
+  </div>;
+}
+
 // Broker side of the client's portal shelf: read what they uploaded, answer
 // their notes, file documents back — so a promise to purchase or a
 // pre-approval never has to travel as an email attachment.
@@ -833,6 +881,7 @@ function ContactsView({toast, on, feats}) {
           </div>
         </div>
         {sel.lifecycle==="client" && <CriteriaPanel cid={sel.id} toast={toast}/>}
+        {sel.lifecycle==="client" && on && on("alert_mailer") && <AlertMailPanel cid={sel.id} email={sel.email} toast={toast}/>}
         {sel.lifecycle==="client" && on && on("client_documents") && <VaultPanel cid={sel.id} toast={toast}/>}
         {on && on("consent_vault") && <ConsentPanel cid={sel.id} toast={toast}/>}
         <div className="panel p-3 mt-3">

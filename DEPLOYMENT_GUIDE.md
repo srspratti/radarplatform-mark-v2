@@ -180,6 +180,24 @@ per listing no matter how many times an ingest runs:
   `portal_link_watcher.py --details --apply` does this ordering for you and
   prints `avis client: N inscription(s) — courriel … · texto …`.
 
+**Proofing the template.** `/ops` → client drawer → **"ALERT EMAIL —
+preview and test"**: *Preview* opens the real template in a new tab, *Send a
+test* delivers one real copy (leave the field empty for the client's own
+address, or type yours). Same by API:
+```bash
+# render it — nothing sent, nothing recorded
+curl -s -H "X-Radar-Key: $KEY" "$APP/api/alert-mail/preview?contact_id=15" > mail.html
+# send one real copy to yourself
+curl -s -X POST -H "X-Radar-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"contact_id":15,"to":"you@example.com"}' $APP/api/alert-mail/test
+```
+Both use the client's own listings (sample cards when their book is empty) and
+neither stamps `announced_at` nor writes an event — so rehearsing costs no
+real announcement. `"status":"simulated"` means `SMTP_*` is not configured and
+nothing left the server; `"sent"` means it went through. Clicking a link in
+the test email does log `email.link_clicked` for that client — that click is
+the measurement mechanism.
+
 To suppress notification on an ingest (backfills, corrections), post with
 `"announce": false` — the rows stay unannounced until something announces
 them. Listings that predate this feature were stamped as already-announced by

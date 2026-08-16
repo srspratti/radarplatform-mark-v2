@@ -168,6 +168,24 @@ seule fois** par inscription, peu importe le nombre d'ingestions :
   numéros nus. `portal_link_watcher.py --details --apply` respecte cet ordre
   et affiche `avis client: N inscription(s) — courriel … · texto …`.
 
+**Vérifier le gabarit.** `/ops` → fiche client → **« COURRIEL D'ALERTE —
+aperçu et test »** : *Aperçu* ouvre le vrai gabarit dans un nouvel onglet,
+*Envoyer un test* livre une vraie copie (champ vide = l'adresse du client,
+sinon la vôtre). En API :
+```bash
+# rendu seulement — rien d'envoyé, rien de consigné
+curl -s -H "X-Radar-Key: $KEY" "$APP/api/alert-mail/preview?contact_id=15" > mail.html
+# une vraie copie vers votre boîte
+curl -s -X POST -H "X-Radar-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"contact_id":15,"to":"vous@exemple.ca"}' $APP/api/alert-mail/test
+```
+Les deux utilisent les inscriptions du client (cartes d'exemple si son livre
+est vide) et aucun des deux ne pose `announced_at` ni n'écrit d'événement :
+répéter ne coûte aucune vraie annonce. `"status":"simulated"` = `SMTP_*` non
+configuré, rien n'est sorti du serveur ; `"sent"` = c'est parti. Cliquer un
+lien du courriel de test consigne bien un `email.link_clicked` pour ce
+client — ce clic EST le mécanisme de mesure.
+
 Pour ingérer sans avertir (reprises, corrections), publiez avec
 `"announce": false` — les fiches restent non annoncées jusqu'à ce qu'une
 annonce les couvre. Les inscriptions antérieures à cette fonction ont été
