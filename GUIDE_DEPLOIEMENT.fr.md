@@ -144,6 +144,26 @@ Vitrine en notes de personne. Planifiez les deux (§7).
 5. Cycle de lecture : `POST /api/connectors/matrix/poll` (à planifier, §7),
    ou testez n'importe quel courriel avec `scripts/ingest_email.sh`.
 
+#### 5.2.0 Import PDF — chaque format remplit ce qu'il porte
+Le remplissage est à sens unique : un champ vide prend la valeur du document,
+un champ déjà rempli la garde. L'ordre des dépôts n'a donc pas d'importance :
+une fiche créée comme simple identifiant (veilleur de portail, impression de
+numéros) est **complétée** par un PDF de grille déposé plus tard — adresse,
+prix, chambres et salles de bain atterrissent sur la fiche existante au lieu
+d'être jetés comme doublon (`listings_filled` les compte). Un PDF détaillé
+remplit à la fois `details` (année, taxes, pièces, remarques) **et** les
+colonnes de la carte qu'il énonce (`fields_filled`). Rien de corrigé à la
+main n'est écrasé, et redéposer le même PDF est sans risque.
+
+*Si les cartes d'un client affichent « Prix à confirmer » depuis un import
+antérieur : redéposez le PDF de grille — les prix entreront cette fois.*
+
+Le prix d'une fiche détaillée n'est lu que s'il est **étiqueté** (Asking
+Price / Prix demandé / …). Ces fiches portent aussi des évaluations
+municipales et des taxes en dollars : deviner « le premier montant en $ »
+transformerait une évaluation en prix demandé. « Prix à confirmer » est la
+réponse honnête ; la grille ou le DDF® fournit le vrai chiffre.
+
 #### 5.2.1 Avertir le client — courriel + texto, les deux éditions
 Dès que des inscriptions entrent pour un client, le hub l'avertit **à sa vraie
 adresse courriel et à son vrai numéro** (jamais l'adresse d'admission interne) :

@@ -476,6 +476,7 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
         created = photos_added = 0
         enriched, unmatched = [], []
         touched: list[int] = []
+        filled: set[str] = set()
         for item in items:
             no = item["centris_no"]
             q = db.query(Listing).filter_by(tenant_id=t, centris_no=no)
@@ -497,6 +498,12 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
                 det.update({k: v for k, v in item.items()
                             if k not in ("centris_no", "photos") and v})
                 row.details = det
+                # Facts the sheet states about the property itself belong in
+                # the COLUMNS too — the portal cards read price/beds/baths
+                # from there, so a sheet that only fed `details` left a
+                # listing showing « Prix à confirmer » with the price sitting
+                # right there in the JSON. Empty columns only: never clobber.
+                filled |= set(mx.fill_listing(row, item))
             db.commit()
             enriched.append(no)
             if item["photos"] and features.enabled("listing_photos"):
@@ -518,7 +525,7 @@ def matrix_ingest_pdf(body: PdfIngestIn, db: Session = Depends(get_db),
         return {"mode": "detailed", "parsed_rows": len(items),
                 "enriched": enriched, "unmatched": unmatched,
                 "listings_new": created, "photos_added": photos_added,
-                "announced": ann}
+                "fields_filled": sorted(filled), "announced": ann}
     if not c:
         raise HTTPException(422, "PDF de grille : choisir le client "
                                  "(contact_id requis — la grille ne dit pas à "
@@ -614,14 +621,8 @@ def matrix_ingest_details(body: PortalDetailsIn, db: Session = Depends(get_db),
             det.update(fields)
             det.setdefault("source", body.source[:40])
             row.details = det
-            if not row.address and item.get("address"):
-                row.address = str(item["address"])[:290]
-            if not row.price and item.get("price"):
-                row.price = int(item["price"])
-            if not row.beds and item.get("beds"):
-                row.beds = int(item["beds"])
-            if not row.baths and item.get("baths"):
-                row.baths = int(item["baths"])
+            # Same one-way column fill every other ingest path uses.
+            mx.fill_listing(row, item)
         db.commit()
         # photos are tenant-wide per Centris number — same contract as the
         # detailed-PDF album (first source wins, capped, feature-gated)

@@ -285,17 +285,45 @@ def contact_by_recipient(db: Session, tenant_id: str, raw: str) -> Contact | Non
                     Contact.intake_email.in_(addresses)).first())
 
 
+# Columns a card can fill. Filling is one-way: an empty column takes the
+# card's value, a column that already holds something keeps it. So whichever
+# document arrives second completes the row instead of overwriting it, and
+# nothing a human already corrected is ever clobbered.
+CARD_COLUMNS = ("address", "area", "price", "beds", "baths", "prop_type", "url")
+
+
+def fill_listing(row, card: dict) -> list[str]:
+    """Backfill the row's empty columns from a card. Returns what it filled."""
+    filled = []
+    for key in CARD_COLUMNS:
+        val = card.get(key)
+        if not val or getattr(row, key, None):
+            continue
+        setattr(row, key, int(val) if key in ("price", "beds", "baths")
+                else str(val)[:290])
+        filled.append(key)
+    return filled
+
+
 def store_listings(db: Session, tenant_id: str, contact: Contact,
                    cards: list[dict], raw_id: str = "") -> dict:
     from ..models import Listing
-    new = dup = 0
+    new = dup = updated = 0
     new_cards: list[dict] = []
     for card in cards:
         exists = (db.query(Listing)
                   .filter_by(tenant_id=tenant_id, contact_id=contact.id,
                              centris_no=card["centris_no"]).first())
         if exists:
+            # The row is known — but it may be a bare identifier posted by the
+            # portal watcher or a numbers-only print, in which case THIS grid
+            # carries the address and price it lacks. Counting it as a
+            # duplicate and walking away is how a listing ends up showing
+            # « Prix à confirmer » forever.
             dup += 1
+            if fill_listing(exists, card):
+                db.commit()
+                updated += 1
             continue
         db.add(Listing(tenant_id=tenant_id, contact_id=contact.id, **card))
         db.commit()
@@ -335,6 +363,7 @@ def store_listings(db: Session, tenant_id: str, contact: Contact,
         ann = announce_new_listings(db, tenant_id, contact, raw_id)
         alert_status, sms_status = ann["email"], ann["sms"]
     return {"listings_new": new, "listings_dup": dup,
+            "listings_filled": updated,
             "alert_email": alert_status, "alert_sms": sms_status,
             "announced": ann}
 

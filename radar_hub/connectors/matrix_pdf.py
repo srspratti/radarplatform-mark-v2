@@ -151,6 +151,25 @@ _RX_DET_ROOM = re.compile(
 _RX_DET_REMARKS = re.compile(
     r"Remarks\s*([\s\S]{60,4000}?)(?:Addendum|Sale with|Seller.s declaration|"
     r"Source:|Centris No\.|$)")
+# Price on a detail sheet is taken ONLY from a labeled field. Detail sheets
+# also carry municipal/school assessments and tax figures in dollars, and
+# guessing "the first $ amount" turns an evaluation into an asking price —
+# a wrong number shown to a client is worse than « Prix à confirmer ».
+_RX_DET_PRICE = re.compile(
+    r"(?:Asking Price|Listing Price|Sale Price|Price asked|Prix demandé|"
+    r"Prix de vente|\bPrice\b|\bPrix\b)\D{0,40}?"
+    r"\$\s?(\d{1,3}(?:,\d{3})+|\d{5,8})", re.I)
+_RX_DET_PRICE_FR = re.compile(
+    r"(?:Prix demandé|Prix de vente|\bPrix\b)\D{0,40}?"
+    r"(\d{1,3}(?:[  ]\d{3})+|\d{5,8})\s?\$", re.I)
+_RX_DET_BEDS = re.compile(r"(\d{1,2})\s*(?:\+\s*(\d{1,2})\s*)?"
+                          r"(?:Bedrooms?|Chambres?)\b", re.I)
+_RX_DET_BEDS2 = re.compile(r"(?:Bedrooms?|Chambres?)\D{0,20}?(\d{1,2})", re.I)
+_RX_DET_BATHS = re.compile(r"(\d{1,2})\s*(?:Bathrooms?|Salles? de bain)\b", re.I)
+_RX_DET_BATHS2 = re.compile(r"(?:Bathrooms?|Salles? de bain)\D{0,20}?(\d{1,2})",
+                            re.I)
+_RX_DET_PTYPE = re.compile(r"Property Type\s*([A-Za-zéèêàôû' -]{3,40}?)\s*"
+                           r"(?:Year Built|Building Type|Ann[ée]e)", re.I)
 
 
 def is_detailed_pdf(text: str) -> bool:
@@ -184,6 +203,18 @@ def _parse_detail_text(text: str) -> dict:
         out["remarks"] = re.sub(r"\s+", " ", m.group(1)).strip()[:1400]
     elif (i := text.find("Remarks")) >= 0:  # very long remarks: hard cut
         out["remarks"] = re.sub(r"\s+", " ", text[i + 7:i + 1400]).strip()
+    if m := _RX_DET_PTYPE.search(text):
+        out["prop_type"] = m.group(1).strip()[:120]
+    # Labeled price only — see the regex note. "3+1 Bedrooms" counts the
+    # basement rooms as the second figure; the card shows the main count.
+    if m := _RX_DET_PRICE.search(text):
+        out["price"] = int(m.group(1).replace(",", ""))
+    elif m := _RX_DET_PRICE_FR.search(text):
+        out["price"] = int(re.sub(r"[  ]", "", m.group(1)))
+    if m := (_RX_DET_BEDS.search(text) or _RX_DET_BEDS2.search(text)):
+        out["beds"] = int(m.group(1))
+    if m := (_RX_DET_BATHS.search(text) or _RX_DET_BATHS2.search(text)):
+        out["baths"] = int(m.group(1))
     rooms = [{"level": lv, "name": name.strip(),
               "w_ft": float(w), "d_ft": float(d)}
              for lv, name, w, d in _RX_DET_ROOM.findall(text)]

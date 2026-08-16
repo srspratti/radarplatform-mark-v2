@@ -150,6 +150,25 @@ select **All** → **Print/Email PDF** with a detailed grid format (e.g.
   attachment automatically when the body has no cards, or
 - **drop it in `/ops`** (client drawer → "Import PDF Matrix"), or
 - `POST /api/connectors/matrix/ingest-pdf` (`contact_id` + `content_b64`).
+**Each format fills what it carries, and the order doesn't matter.** Columns
+are filled one way: an empty field takes the document's value, a field that
+already holds something keeps it. So a row created as a bare identifier (the
+portal watcher, a numbers-only print) is *completed* by a grid PDF dropped
+later — the grid's address, price, beds and baths land on the existing row
+instead of being discarded as a duplicate (`listings_filled` in the response
+counts them). A detailed sheet fills both `details` (year, taxes, rooms,
+remarks) **and** the card columns it states (`fields_filled`). Nothing you
+corrected by hand is ever overwritten, and re-dropping the same PDF is safe.
+
+*If a client's cards show « Prix à confirmer » from an earlier import: drop
+the grid PDF again — the prices will land this time.*
+
+Detail sheets are read conservatively for price: only a **labeled** price
+(Asking Price / Prix demandé / …) is taken. Those sheets also carry municipal
+assessments and tax figures in dollars, and guessing "the first $ amount"
+would turn an evaluation into an asking price — « Prix à confirmer » is the
+honest answer, and the grid PDF or DDF® supplies the real number.
+
 Rows are deduped per client and announced to the client exactly like
 email-parsed cards (§5.2.1). Four human clicks in Matrix, zero automation of
 Centris. (`RADAR_EDITION=internal` additionally unlocks the fenced RPA

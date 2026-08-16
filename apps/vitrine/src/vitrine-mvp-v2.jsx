@@ -2697,6 +2697,7 @@ function browseRows(lang) {
       price: l.price, beds: l.beds,
       bathsStr: l.baths ? `${Math.floor(l.baths)}+${pr}` : "",
       heatStr: lang === "fr" ? HEAT[l.heating].fr : HEAT[l.heating].en,
+      baths: l.baths, year: l.year, sqft: l.sqft,
       rooms: m.rooms, lot: m.lot, garage: /garage/i.test(l.parkFr), fire: !!m.fire, pool: /piscine/i.test(l.inclFr),
       badge: m.badge, dateSent: m.dateSent, g: l.accent, xy: pinXY(l.id, m.xy), full: true, condo: l.condoFees > 0, video: HERO_VIDEOS[l.id] || null,
       centrisUrl: l.centrisUrl || "", photos: (featOn("listing_photos") && l.photos) || [],
@@ -2742,6 +2743,60 @@ function ListingsView({ lang, onOpen, log }) {
   const [q, setQ] = useState("");
   const fold = (s) => (s || "").toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "");
+  // [radar-platform] The listing filters speak the SAME vocabulary as
+  // « Mes alertes » — the criteria that fetch new listings — so shopping
+  // what arrived and describing what to fetch are one language. "Utiliser
+  // mes critères" loads the client's saved alert exactly.
+  const NO_F = { price: { min: 0, max: 0 }, beds: 0, baths: 0,
+    year: { min: 0 }, living: { min: 0 }, lot: { min: 0 }, must: [] };
+  const [f, setF] = useState(NO_F);
+  const [openF, setOpenF] = useState(false);
+  const [fromPrefs, setFromPrefs] = useState(false);
+  const upF = (patch) => { setF((c) => ({ ...c, ...patch })); setFromPrefs(false); };
+  const upR = (k, part, v) => upF({ [k]: { ...(f[k] || {}), [part]: v } });
+  const toggleMust = (k) => upF({ must: f.must.includes(k)
+    ? f.must.filter((x) => x !== k) : [...f.must, k] });
+  // Facets we can honestly evaluate against captured data — each maps to a
+  // fact the sweep or the PDF actually gives us.
+  const MUSTS = [
+    ["pool", t("Piscine", "Pool"), (r) => r.pool || /piscine|pool/i.test(r.inclusions)],
+    ["fire", t("Foyer", "Fireplace"), (r) => r.fire || !!fold(r.fireplaceStr) || /foyer|poêle|fireplace/i.test(r.inclusions)],
+    ["water", t("Bord de l'eau", "Waterfront"), (r) => !!fold(r.waterAccess) || /bord de l|riverain|waterfront|lac |rivi/i.test(`${r.remarks} ${r.addendum}`)],
+    ["garage", t("Garage", "Garage"), (r) => r.garage || /garage/i.test(`${r.inclusions} ${r.remarks}`)],
+  ];
+  async function useMyAlertCriteria() {
+    const saved = await store.get(K.prefs, null);
+    const p = saved && saved.p ? migratePrefs(saved.p) : DEFAULT_PREFS;
+    const must = [];
+    if ((p.pool || []).length) must.push("pool");
+    if ((p.fireplace || []).length) must.push("fire");
+    if ((p.water || []).length) must.push("water");
+    if ((p.amenities || []).some((a) => /garage/i.test(a))) must.push("garage");
+    setF({ price: { min: p.price.min || 0, max: p.price.max || 0 },
+      beds: p.beds || 0, baths: p.baths || 0,
+      year: { min: (p.year && p.year.min) || 0 },
+      living: { min: (p.living && p.living.min) || 0 },
+      lot: { min: (p.lot && p.lot.min) || 0 }, must });
+    if ((p.areas || []).length)
+      setOffAreas(allAreas.filter((a) => !p.areas.some((x) => a.includes(x) || x.includes(a))));
+    setFromPrefs(true); setOpenF(true);
+    log("filter_from_criteria", { musts: must.length });
+  }
+  const matchF = (r) => {
+    // A missing fact never disqualifies a listing — « Prix à confirmer »
+    // must not vanish because a price filter is set. Filters narrow on what
+    // is KNOWN; unknowns stay visible and honest.
+    if (f.price.min && r.price && r.price < f.price.min) return false;
+    if (f.price.max && r.price && r.price > f.price.max) return false;
+    if (f.beds && r.beds && r.beds < f.beds) return false;
+    if (f.baths && r.baths && r.baths < f.baths) return false;
+    if (f.year.min && r.year && r.year < f.year.min) return false;
+    if (f.living.min && r.sqft && r.sqft < f.living.min) return false;
+    if (f.lot.min && r.lot && r.lot < f.lot.min) return false;
+    return MUSTS.every(([k, , test]) => !f.must.includes(k) || test(r));
+  };
+  const fActive = !!(f.price.min || f.price.max || f.beds || f.baths
+    || f.year.min || f.living.min || f.lot.min || f.must.length);
   const catOf = (r) => {
     const s = fold(`${r.styleStr} ${r.typeStr} ${r.propertyUse}`);
     if (/commercial|industri|business/.test(s)) return "commercial";
@@ -2765,6 +2820,7 @@ function ListingsView({ lang, onOpen, log }) {
   const shown = rows
     .filter((r) => !offAreas.includes(r.area))
     .filter((r) => cat === "all" || catOf(r) === cat)
+    .filter(matchF)
     .filter((r) => !qf || fold([r.addr, r.area, r.inclusions, r.exclusions,
       r.addendum, r.remarks, r.styleStr, r.agency].join(" ")).includes(qf))
     .sort((a, b) => {
@@ -2869,6 +2925,88 @@ function ListingsView({ lang, onOpen, log }) {
           className="rounded-full px-3 py-1.5" style={{ border: `1.5px solid ${C.line}`, background: C.paper, fontSize: 12.5, minWidth: 210, color: C.ink }} />
         {q && <button onClick={() => setQ("")} style={{ background: "transparent", border: 0, fontSize: 12, fontWeight: 700, color: C.sub }}>✕</button>}
       </div>
+
+      {/* Criteria filters — the same fields « Mes alertes » uses to fetch */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button onClick={() => setOpenF((x) => !x)} className="rounded-full px-3 py-1.5 inline-flex items-center gap-1.5"
+          style={{ background: fActive ? C.metroSoft : C.paper, color: fActive ? C.metro : C.sub, border: `1.5px solid ${fActive ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+          <Sparkles size={12} /> {t("Critères", "Criteria")}{fActive ? " ●" : ""}
+        </button>
+        <button onClick={useMyAlertCriteria} className="rounded-full px-3 py-1.5"
+          style={{ background: fromPrefs ? C.metro : C.paper, color: fromPrefs ? "#fff" : C.metro, border: `1.5px solid ${fromPrefs ? C.metro : "#C9D9F2"}`, fontSize: 12, fontWeight: 700 }}>
+          {t("↧ Utiliser mes critères d'alerte", "↧ Use my alert criteria")}
+        </button>
+        {fActive && (
+          <button onClick={() => { setF(NO_F); setFromPrefs(false); setOffAreas([]); }}
+            style={{ background: "transparent", border: 0, fontSize: 12, fontWeight: 700, color: C.sub }}>
+            ✕ {t("Réinitialiser", "Reset")}
+          </button>
+        )}
+      </div>
+      {openF && (
+        <section className="mt-2 rounded-2xl p-4" style={{ background: C.paper, border: `1px solid ${C.line}` }}>
+          <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 10 }}>
+            {t("Mêmes champs que vos alertes. Une inscription dont le fait est inconnu reste affichée — un filtre ne cache jamais ce qu'on ignore.",
+               "Same fields as your alerts. A listing whose fact is unknown stays visible — a filter never hides what we don't know.")}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Prix", "Price")}</div>
+              <div className="flex items-center gap-1.5">
+                <input type="number" step="25000" value={f.price.min || ""} onChange={(e) => upR("price", "min", +e.target.value || 0)}
+                  placeholder={t("min", "min")} style={{ width: "48%", borderRadius: 10, border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 }} />
+                <span style={{ color: C.sub }}>–</span>
+                <input type="number" step="25000" value={f.price.max || ""} onChange={(e) => upR("price", "max", +e.target.value || 0)}
+                  placeholder={t("max", "max")} style={{ width: "48%", borderRadius: 10, border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 }} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Année de construction (à partir de)", "Year built (from)")}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {[0, 1960, 1980, 2000, 2015].map((y) => (
+                  <button key={y} onClick={() => upR("year", "min", y)} className="rounded-full px-2.5 py-1"
+                    style={{ background: (f.year.min || 0) === y ? C.metroSoft : C.paper, color: (f.year.min || 0) === y ? C.metro : C.sub, border: `1.5px solid ${(f.year.min || 0) === y ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+                    {y === 0 ? t("Toutes", "Any") : `${y}+`}
+                  </button>))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Chambres (min)", "Bedrooms (min)")}</div>
+              <div className="flex gap-1.5">
+                {[0, 1, 2, 3, 4].map((n) => (
+                  <button key={n} onClick={() => upF({ beds: n })} className="rounded-full px-2.5 py-1"
+                    style={{ background: f.beds === n ? C.metroSoft : C.paper, color: f.beds === n ? C.metro : C.sub, border: `1.5px solid ${f.beds === n ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+                    {n === 0 ? t("Toutes", "Any") : `${n}+`}
+                  </button>))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Salles de bain (min)", "Bathrooms (min)")}</div>
+              <div className="flex gap-1.5">
+                {[0, 1, 2, 3].map((n) => (
+                  <button key={n} onClick={() => upF({ baths: n })} className="rounded-full px-2.5 py-1"
+                    style={{ background: f.baths === n ? C.metroSoft : C.paper, color: f.baths === n ? C.metro : C.sub, border: `1.5px solid ${f.baths === n ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+                    {n === 0 ? t("Toutes", "Any") : `${n}+`}
+                  </button>))}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3">
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>{t("Doit avoir", "Must have")}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {MUSTS.map(([k, label]) => (
+                <button key={k} onClick={() => toggleMust(k)} className="rounded-full px-3 py-1.5"
+                  style={{ background: f.must.includes(k) ? C.metroSoft : C.paper, color: f.must.includes(k) ? C.metro : C.sub, border: `1.5px solid ${f.must.includes(k) ? "#C9D9F2" : C.line}`, fontSize: 12, fontWeight: 700 }}>
+                  {label}
+                </button>))}
+            </div>
+          </div>
+          <div className="mt-3" style={{ fontFamily: F.mono, fontSize: 11, color: C.sub }}>
+            {shown.length} / {rows.length} {t("inscriptions", "listings")}
+          </div>
+        </section>
+      )}
+
       {shown.length === 0 && (
         <div className="mt-6 rounded-2xl p-6 text-center" style={{ background: C.paper, border: `1.5px dashed ${C.line}`, color: C.sub, fontSize: 13 }}>
           {t("Aucune inscription ne passe ces filtres — élargissez la catégorie, le texte ou les secteurs.", "No listing matches these filters — widen the category, text or areas.")}

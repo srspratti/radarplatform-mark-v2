@@ -214,3 +214,109 @@ def test_email_with_pdf_attachment_routes_to_client(client, db):
                             pdf_attachments=[_mini_pdf(SAMPLE_TEXT)])
     assert out["routed_by_intake"] is True
     assert out["pdf_listings"] == 3 and out["listings_new"] == 3
+
+
+# --------------------------------------------------------------------------
+# Whichever document arrives, whatever facts it carries must land on the row.
+# The failure this guards: a client's cards showed « Prix à confirmer » with
+# the price sitting in the grid PDF, because the rows already existed as bare
+# identifiers and the grid counted them as duplicates.
+# --------------------------------------------------------------------------
+GRID_WITH_PRICES = """ Centris No.STMun/Bor. Address PriceAsked/Sold PriceBuilding SizeYear BuiltPT BT RmsBdrmBath/PR
+2026-08-09
+12149325ACS Anne du Lac9-9A Rue Sicotte $449,900 $449,90028 X 42 ft 9,371 sqm$216,200$50,100 1976 BUNDET8 3+2 2+0 N Y Y2026-08-09
+24256061ACRiviere Rouge150 Ch. Papp $534,500 $534,50035.6 X 33.9 ft irr 7,293.3 sqm$239,200$221,6001962 BUNDET8 3+2 2+0 Y N N
+"""
+
+
+def _stub_client(client):
+    lead = client.post("/api/leads", json={
+        "name": "Marie Test", "email": "marie@example.com",
+        "source": "matrix_visit"}).json()
+    return client.post(f"/api/leads/{lead['id']}/convert").json()
+
+
+def _b64(raw):
+    return base64.b64encode(raw).decode()
+
+
+def test_grid_pdf_backfills_rows_that_arrived_as_bare_identifiers(client, db):
+    """Watcher/numbers-print first, grid PDF second — the grid completes the
+    stubs instead of reporting them as duplicates and dropping the facts."""
+    from radar_hub.models import Listing
+    c = _stub_client(client)
+    client.post("/api/connectors/matrix/ingest-numbers",
+                json={"contact_id": c["id"],
+                      "numbers": ["12149325", "24256061"]})
+    rows = db.query(Listing).filter_by(contact_id=c["id"]).all()
+    assert all(r.price == 0 and not r.address for r in rows)
+
+    r = client.post("/api/connectors/matrix/ingest-pdf",
+                    json={"contact_id": c["id"],
+                          "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES)),
+                          "filename": "grille.pdf"}).json()
+    assert r["listings_new"] == 0 and r["listings_dup"] == 2
+    assert r["listings_filled"] == 2          # both stubs completed
+    db.expire_all()
+    by_no = {x.centris_no: x for x in
+             db.query(Listing).filter_by(contact_id=c["id"]).all()}
+    assert by_no["12149325"].price == 449900
+    assert "Rue Sicotte" in by_no["12149325"].address
+    assert by_no["12149325"].beds == 3 and by_no["12149325"].baths == 2
+    assert by_no["24256061"].price == 534500
+
+
+def test_a_second_grid_never_overwrites_corrected_values(client, db):
+    from radar_hub.models import Listing
+    c = _stub_client(client)
+    client.post("/api/connectors/matrix/ingest-pdf",
+                json={"contact_id": c["id"],
+                      "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES))})
+    row = (db.query(Listing)
+           .filter_by(contact_id=c["id"], centris_no="12149325").first())
+    row.address = "Adresse corrigée à la main"
+    db.commit()
+    client.post("/api/connectors/matrix/ingest-pdf",
+                json={"contact_id": c["id"],
+                      "content_b64": _b64(_mini_pdf(GRID_WITH_PRICES))})
+    db.expire_all()
+    row = (db.query(Listing)
+           .filter_by(contact_id=c["id"], centris_no="12149325").first())
+    assert row.address == "Adresse corrigée à la main"
+
+
+DETAILED_WITH_PRICE = DETAILED_TEXT.replace(
+    "Property Type Two or more storey Year Built",
+    "Asking Price $675,000\n4 Bedrooms 2 Bathrooms\n"
+    "Property Type Two or more storey Year Built")
+
+
+def test_detailed_pdf_promotes_its_facts_to_the_card_columns(client, db):
+    """A detail sheet used to fill only `details`, so the portal card kept
+    showing « Prix à confirmer » with the price present in the JSON."""
+    from radar_hub.models import Listing
+    c = _stub_client(client)
+    client.post("/api/connectors/matrix/ingest-numbers",
+                json={"contact_id": c["id"], "numbers": ["17004507"]})
+    r = client.post("/api/connectors/matrix/ingest-pdf",
+                    json={"contact_id": c["id"],
+                          "content_b64": _b64(_mini_pdf(DETAILED_WITH_PRICE))}
+                    ).json()
+    assert r["mode"] == "detailed"
+    assert {"price", "address", "beds"} <= set(r["fields_filled"])
+    db.expire_all()
+    row = (db.query(Listing)
+           .filter_by(contact_id=c["id"], centris_no="17004507").first())
+    assert row.price == 675000 and row.beds == 4 and row.baths == 2
+    assert "Allee du 15e" in row.address
+    assert row.details["year"] == 2010          # details still enriched
+
+
+def test_an_unlabeled_dollar_figure_is_never_read_as_the_price(client, db):
+    """Detail sheets carry tax and assessment dollars. Guessing turns an
+    evaluation into an asking price — « Prix à confirmer » is the honest
+    answer instead."""
+    from radar_hub.connectors.matrix_pdf import parse_detailed_pdf
+    items = parse_detailed_pdf(_mini_pdf(DETAILED_TEXT))   # taxes only
+    assert "price" not in items[0]
+    assert items[0]["taxes_mun"] == 3311
